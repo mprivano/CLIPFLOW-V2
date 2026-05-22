@@ -9,6 +9,7 @@ let isSigningIn = false;
 let externalGDriveAutoStartUsed = false;
 let isFirebaseReady = false;
 let firebaseAuthStatus = null;
+let gdriveSessionPollId = null;
 let gdriveFiles = [];
 let gdriveFolders = [];
 let isGDriveLoading = false;
@@ -1848,6 +1849,81 @@ function getFirebaseAuthSetupMessage(status) {
   return `Google sign-in is blocked because ${domain} is not allowed in Firebase Authentication yet. Add localhost to Authorized domains, then refresh ClipFlow.`;
 }
 
+async function loadGoogleDriveSession(options = {}) {
+  try {
+    const response = await fetch(apiUrl("/api/google-drive-session"));
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.connected || !data.accessToken) {
+      return false;
+    }
+
+    cachedAccessToken = data.accessToken;
+    googleUser = data.user || googleUser || { displayName: "Google Drive", email: "" };
+    gdriveError = null;
+
+    if (options.loadFiles !== false) {
+      await triggerGDriveLoad();
+    } else {
+      renderGDrive();
+    }
+
+    return true;
+  } catch (err) {
+    console.warn("Could not load Google Drive session:", err);
+    return false;
+  }
+}
+
+async function saveGoogleDriveSession(accessToken, user) {
+  if (!accessToken) return false;
+
+  const response = await fetch(apiUrl("/api/google-drive-session"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      accessToken,
+      user: {
+        displayName: user?.displayName || "",
+        email: user?.email || "",
+        photoURL: user?.photoURL || "",
+        uid: user?.uid || "",
+      },
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data.connected) {
+    throw new Error(data.error || "Could not save Google Drive sign-in.");
+  }
+
+  return true;
+}
+
+async function clearGoogleDriveSession() {
+  await fetch(apiUrl("/api/google-drive-session"), { method: "DELETE" }).catch(() => {});
+}
+
+function startGoogleDriveSessionPolling() {
+  if (gdriveSessionPollId) clearInterval(gdriveSessionPollId);
+
+  let attempts = 0;
+  gdriveSessionPollId = setInterval(async () => {
+    attempts += 1;
+    const connected = await loadGoogleDriveSession();
+
+    if (connected || attempts >= 60) {
+      clearInterval(gdriveSessionPollId);
+      gdriveSessionPollId = null;
+      isSigningIn = false;
+      if (!connected && attempts >= 60) {
+        gdriveError = "Google sign-in did not finish yet. Complete it in the browser window that opened, then try again.";
+        renderGDrive();
+      }
+    }
+  }, 2000);
+}
+
 function beginGoogleDriveRedirect() {
   if (!auth || !provider) {
     throw new Error("Google sign-in is still loading. Try again in a moment.");
@@ -2037,18 +2113,23 @@ async function ensureFirebaseInitialized() {
           cachedAccessToken = credential.accessToken;
           googleUser = redirectResult.user;
           gdriveError = null;
+          await saveGoogleDriveSession(credential.accessToken, redirectResult.user);
           await triggerGDriveLoad();
+          return;
         }
       }
 
+      await loadGoogleDriveSession({ loadFiles: true });
+
       onAuthStateChanged(auth, async (user) => {
         if (user) {
-          googleUser = user;
+          googleUser = googleUser || user;
         } else {
-          googleUser = null;
-          cachedAccessToken = null;
-          gdriveFiles = [];
-          gdriveError = null;
+          if (!cachedAccessToken) {
+            googleUser = null;
+            gdriveFiles = [];
+            gdriveError = null;
+          }
         }
         renderGDrive();
       });
@@ -2558,10 +2639,13 @@ async function renderGDrive() {
 
   // If no auth, show standard Sign-In screen
   if (!googleUser || !cachedAccessToken) {
-    const helperCopy = "Connect Google Drive to access all Mp4 videos synced from Vizard directly inside ClipFlow.";
+    const browserAuthMode = isExternalGDriveAuthMode();
+    const helperCopy = browserAuthMode
+      ? "Connect Google Drive to access all Mp4 videos synced from Vizard directly inside ClipFlow."
+      : "ClipFlow will open your browser for Google sign-in and connect this page when approval is done.";
     const loginButtonText = isSigningIn
-      ? "Opening Google..."
-      : (gdriveError && !isFirebaseReady ? "Google setup needed" : (isFirebaseReady ? "Sign in with Google" : "Preparing Google..."));
+      ? (browserAuthMode ? "Opening Google..." : "Waiting for sign-in...")
+      : (gdriveError && !isFirebaseReady ? "Google setup needed" : (isFirebaseReady ? (browserAuthMode ? "Sign in with Google" : "Open Google sign-in") : "Preparing Google..."));
     const disableLoginButton = isSigningIn || !isFirebaseReady;
     const settingsUrl = firebaseAuthStatus?.settingsUrl || "";
 
@@ -2874,6 +2958,12 @@ async function handleGDriveLogin() {
     gdriveError = null;
     renderGDrive();
 
+    if (!isExternalGDriveAuthMode()) {
+      await openGDriveInExternalBrowser();
+      startGoogleDriveSessionPolling();
+      return;
+    }
+
     beginGoogleDriveRedirect().catch((err) => {
       console.error("Google sign-in error:", err);
       gdriveError = err.message || "Sign in failed.";
@@ -2891,7 +2981,10 @@ async function handleGDriveLogin() {
 async function handleGDriveLogout() {
   try {
     await ensureFirebaseInitialized();
-    await signOut(auth);
+    if (auth) {
+      await signOut(auth).catch(() => {});
+    }
+    await clearGoogleDriveSession();
     googleUser = null;
     cachedAccessToken = null;
     gdriveFiles = [];

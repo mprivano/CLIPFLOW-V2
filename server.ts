@@ -22,6 +22,7 @@ const vizardApiKey = process.env.VIZARDAI_API_KEY || "";
 const transcriptionModel = process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
 const analysisModel = process.env.OPENAI_ANALYSIS_MODEL || "gpt-5.4-mini";
 const maxTranscriptionBytes = 24 * 1024 * 1024;
+let googleDriveSession: any = null;
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -75,6 +76,25 @@ async function start() {
         const result = await handleFirebaseAuthStatus(request);
         sendJson(response, result);
         return;
+      }
+
+      if (url.pathname === "/api/google-drive-session") {
+        if (request.method === "GET") {
+          sendJson(response, getGoogleDriveSession());
+          return;
+        }
+
+        if (request.method === "POST") {
+          const result = await handleGoogleDriveSessionSave(request);
+          sendJson(response, result);
+          return;
+        }
+
+        if (request.method === "DELETE") {
+          googleDriveSession = null;
+          sendJson(response, { ok: true, connected: false });
+          return;
+        }
       }
 
       if (url.pathname === "/api/clip" && request.method === "POST") {
@@ -246,6 +266,54 @@ async function start() {
   });
 }
 
+function getGoogleDriveSession() {
+  if (!googleDriveSession?.accessToken || Date.now() > googleDriveSession.expiresAt) {
+    googleDriveSession = null;
+    return { connected: false };
+  }
+
+  return {
+    connected: true,
+    accessToken: googleDriveSession.accessToken,
+    user: googleDriveSession.user,
+    connectedAt: googleDriveSession.connectedAt,
+    expiresAt: googleDriveSession.expiresAt,
+  };
+}
+
+async function handleGoogleDriveSessionSave(request: any) {
+  const body = await readJsonRequest(request);
+  const accessToken = String(body.accessToken || "").trim();
+
+  if (!accessToken) {
+    throw new Error("Missing Google Drive access token.");
+  }
+
+  googleDriveSession = {
+    accessToken,
+    user: sanitizeGoogleUser(body.user || {}),
+    connectedAt: Date.now(),
+    expiresAt: Date.now() + 55 * 60 * 1000,
+  };
+
+  return {
+    ok: true,
+    connected: true,
+    user: googleDriveSession.user,
+    connectedAt: googleDriveSession.connectedAt,
+    expiresAt: googleDriveSession.expiresAt,
+  };
+}
+
+function sanitizeGoogleUser(user: any) {
+  return {
+    displayName: String(user.displayName || "").slice(0, 160),
+    email: String(user.email || "").slice(0, 240),
+    photoURL: String(user.photoURL || "").slice(0, 500),
+    uid: String(user.uid || "").slice(0, 160),
+  };
+}
+
 async function handleFirebaseAuthStatus(request: any) {
   const configPath = path.join(rootDir, "firebase-applet-config.json");
   const firebaseConfig = JSON.parse(await fsp.readFile(configPath, "utf8"));
@@ -304,15 +372,20 @@ async function handleOpenGoogleDriveBrowser() {
 }
 
 function openExternalUrl(targetUrl: string) {
-  const opener =
-    process.platform === "darwin"
-      ? { command: "open", args: [targetUrl] }
-      : process.platform === "win32"
-        ? { command: "cmd", args: ["/c", "start", "", targetUrl] }
-        : { command: "xdg-open", args: [targetUrl] };
+  if (process.platform === "darwin") {
+    return spawnDetached("open", ["-a", "Comet", targetUrl]).catch(() => spawnDetached("open", [targetUrl]));
+  }
 
+  const opener = process.platform === "win32"
+    ? { command: "cmd", args: ["/c", "start", "", targetUrl] }
+    : { command: "xdg-open", args: [targetUrl] };
+
+  return spawnDetached(opener.command, opener.args);
+}
+
+function spawnDetached(command: string, args: string[]) {
   return new Promise<void>((resolve, reject) => {
-    const child = spawn(opener.command, opener.args, {
+    const child = spawn(command, args, {
       detached: true,
       stdio: "ignore",
     });
