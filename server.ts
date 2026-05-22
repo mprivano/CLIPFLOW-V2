@@ -77,26 +77,29 @@ async function start() {
         return;
       }
 
+      const clientVizardKey = request.headers["x-vizard-api-key"] || request.headers["X-Vizard-Api-Key"];
+      const activeVizardApiKey = (typeof clientVizardKey === "string" && clientVizardKey.trim()) ? clientVizardKey.trim() : vizardApiKey;
+
       if (url.pathname === "/api/vizard/clip" && request.method === "POST") {
-        const result = await handleVizardClipRequest(request);
+        const result = await handleVizardClipRequest(request, activeVizardApiKey);
         sendJson(response, result);
         return;
       }
 
       if (url.pathname === "/api/vizard/project" && request.method === "GET") {
-        const result = await handleVizardProjectRequest(url);
+        const result = await handleVizardProjectRequest(url, activeVizardApiKey);
         sendJson(response, result);
         return;
       }
 
       if (url.pathname === "/api/vizard/social-accounts" && request.method === "GET") {
-        const result = await handleVizardSocialAccountsRequest();
+        const result = await handleVizardSocialAccountsRequest(activeVizardApiKey);
         sendJson(response, result);
         return;
       }
 
       if (url.pathname === "/api/vizard/publish" && request.method === "POST") {
-        const result = await handleVizardPublishRequest(request);
+        const result = await handleVizardPublishRequest(request, activeVizardApiKey);
         sendJson(response, result);
         return;
       }
@@ -116,17 +119,44 @@ async function start() {
         }
 
         try {
-          const fetchHeaders: any = {};
-          if (request.headers.range) {
-            fetchHeaders["Range"] = request.headers.range;
-          }
-
           const token = url.searchParams.get("token");
-          if (token) {
-            fetchHeaders["Authorization"] = `Bearer ${token}`;
+          let currentUrl = videoUrlStr;
+          let videoRes: any = null;
+          let redirectCount = 0;
+          const maxRedirects = 5;
+
+          while (redirectCount < maxRedirects) {
+            const fetchHeaders: any = {};
+            if (request.headers.range) {
+              fetchHeaders["Range"] = request.headers.range;
+            }
+
+            // Only send the Authorization token to the initial Google APIs origin.
+            // When redirected, the destination storage domain (e.g. *.googleusercontent.com) gets its own secure token in query params,
+            // and sending a custom Authorization header causes cross-origin auth errors or access denials.
+            if (token && (currentUrl === videoUrlStr || new URL(currentUrl).origin.includes("googleapis.com"))) {
+              fetchHeaders["Authorization"] = `Bearer ${token}`;
+            }
+
+            videoRes = await fetch(currentUrl, {
+              headers: fetchHeaders,
+              redirect: "manual"
+            });
+
+            if (videoRes.status >= 300 && videoRes.status < 400) {
+              const location = videoRes.headers.get("location");
+              if (location) {
+                currentUrl = new URL(location, currentUrl).toString();
+                redirectCount++;
+                continue;
+              }
+            }
+            break;
           }
 
-          const videoRes = await fetch(videoUrlStr, { headers: fetchHeaders });
+          if (!videoRes) {
+            throw new Error("No response received from proxy target");
+          }
           
           const headers: any = {
             "Access-Control-Allow-Origin": "*",
@@ -146,11 +176,23 @@ async function start() {
           response.writeHead(videoRes.status, headers);
 
           if (videoRes.body) {
-            const reader = (videoRes.body as any).getReader();
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              response.write(value);
+            if (typeof (videoRes.body as any).getReader === "function") {
+              const reader = (videoRes.body as any).getReader();
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                response.write(value);
+              }
+            } else if (typeof (videoRes.body as any).pipe === "function") {
+              (videoRes.body as any).pipe(response);
+              await new Promise((resolve) => {
+                response.on("finish", resolve);
+                response.on("close", resolve);
+              });
+            } else if (typeof Symbol.asyncIterator !== "undefined" && (videoRes.body as any)[Symbol.asyncIterator]) {
+              for await (const chunk of (videoRes.body as any)) {
+                response.write(chunk);
+              }
             }
           }
           response.end();
@@ -278,9 +320,9 @@ async function handleDeleteMediaRequest(request: any) {
   return { deleted };
 }
 
-async function handleVizardClipRequest(request: any) {
-  if (!vizardApiKey) {
-    throw new Error("Vizard API key is not configured. Start the server with VIZARDAI_API_KEY.");
+async function handleVizardClipRequest(request: any, apiKey: string) {
+  if (!apiKey) {
+    throw new Error("Vizard API key is not configured. Start the server with VIZARDAI_API_KEY or configure a Vizard API Account.");
   }
 
   const body = await readJsonRequest(request);
@@ -310,39 +352,66 @@ async function handleVizardClipRequest(request: any) {
   const created = await callVizard("/project/create", {
     method: "POST",
     body: payload,
-  });
+  }, apiKey);
 
   if (created.code !== 2000 || !created.projectId) {
     throw new Error(created.errMsg || created.msg || "Vizard did not create the project.");
   }
 
-  const result = await pollVizardProject(created.projectId);
-  const clips = (Array.isArray(result.videos) ? result.videos : []).map((clip, index) => vizardClipToClipflow(clip, projectName, index));
+  // Check once immediately to see if it's magically ready
+  let result;
+  try {
+    result = await callVizard(`/project/query/${created.projectId}`, { method: "GET" }, apiKey);
+  } catch (e) {
+    result = { code: 1000 };
+  }
+
+  if (result.code === 2000 && Array.isArray(result.videos) && result.videos.length) {
+    const clips = result.videos.map((clip, index) => vizardClipToClipflow(clip, projectName, index));
+    return {
+      status: "ready",
+      source: {
+        title: projectName,
+        projectId: created.projectId,
+        shareLink: result.shareLink || created.shareLink || "",
+      },
+      understanding: {
+        status: "ready",
+        summary: `Vizard analyzed the video and returned ${clips.length} clips.`,
+        topics: topicsFromVizard(clips),
+        transcriptPreview: clips.map((clip) => clip.transcript).filter(Boolean).join(" ").slice(0, 1200),
+        segmentCount: clips.length,
+        provider: "vizard",
+      },
+      clips,
+    };
+  }
 
   return {
+    status: "processing",
     source: {
       title: projectName,
       projectId: created.projectId,
-      shareLink: result.shareLink || created.shareLink || "",
+      shareLink: created.shareLink || "",
     },
     understanding: {
-      status: "ready",
-      summary: `Vizard analyzed the video and returned ${clips.length} clips.`,
-      topics: topicsFromVizard(clips),
-      transcriptPreview: clips.map((clip) => clip.transcript).filter(Boolean).join(" ").slice(0, 1200),
-      segmentCount: clips.length,
+      status: "waiting",
+      summary: "Vizard has received the video and is processing it.",
+      topics: [],
+      transcriptPreview: "",
+      segmentCount: 0,
       provider: "vizard",
     },
-    clips,
+    clips: [],
   };
 }
 
-async function handleVizardSocialAccountsRequest() {
-  if (!vizardApiKey) {
-    throw new Error("Vizard API key is not configured. Start the server with VIZARDAI_API_KEY.");
+async function handleVizardSocialAccountsRequest(apiKey: string) {
+  if (!apiKey) {
+    throw new Error("Vizard API key is not configured. Start the server with VIZARDAI_API_KEY or configure a Vizard API Account.");
   }
 
-  const data = await callVizard("/project/social-accounts", { method: "GET" });
+  const data = await callVizard("/project/social-accounts", { method: "GET" }, apiKey);
   const accounts = Array.isArray(data.publishAccounts) ? data.publishAccounts : [];
 
   return {
@@ -351,9 +420,9 @@ async function handleVizardSocialAccountsRequest() {
   };
 }
 
-async function handleVizardProjectRequest(url: any) {
-  if (!vizardApiKey) {
-    throw new Error("Vizard API key is not configured. Start the server with VIZARDAI_API_KEY.");
+async function handleVizardProjectRequest(url: any, apiKey: string) {
+  if (!apiKey) {
+    throw new Error("Vizard API key is not configured. Start the server with VIZARDAI_API_KEY or configure a Vizard API Account.");
   }
 
   const projectId = String(url.searchParams.get("projectId") || "").trim();
@@ -361,7 +430,7 @@ async function handleVizardProjectRequest(url: any) {
     throw new Error("Choose a saved Vizard project first.");
   }
 
-  const result = await callVizard(`/project/query/${encodeURIComponent(projectId)}`, { method: "GET" });
+  const result = await callVizard(`/project/query/${encodeURIComponent(projectId)}`, { method: "GET" }, apiKey);
   if (result.code === 1000) {
     return {
       status: "processing",
@@ -408,9 +477,9 @@ async function handleVizardProjectRequest(url: any) {
   };
 }
 
-async function handleVizardPublishRequest(request: any) {
-  if (!vizardApiKey) {
-    throw new Error("Vizard API key is not configured. Start the server with VIZARDAI_API_KEY.");
+async function handleVizardPublishRequest(request: any, apiKey: string) {
+  if (!apiKey) {
+    throw new Error("Vizard API key is not configured. Start the server with VIZARDAI_API_KEY or configure a Vizard API Account.");
   }
 
   const body = await readJsonRequest(request);
@@ -439,7 +508,7 @@ async function handleVizardPublishRequest(request: any) {
   const result = await callVizard("/project/publish-video", {
     method: "POST",
     body: payload,
-  });
+  }, apiKey);
 
   if (result.code !== 2000) {
     throw new Error(result.errMsg || result.msg || "Vizard could not publish this clip.");
@@ -448,7 +517,7 @@ async function handleVizardPublishRequest(request: any) {
   return { ok: true, result };
 }
 
-async function pollVizardProject(projectId) {
+async function pollVizardProject(projectId, apiKey) {
   const attempts = Number(process.env.VIZARD_POLL_ATTEMPTS || 40);
   const intervalMs = Number(process.env.VIZARD_POLL_INTERVAL_MS || 30000);
 
@@ -457,7 +526,7 @@ async function pollVizardProject(projectId) {
       await delay(intervalMs);
     }
 
-    const result = await callVizard(`/project/query/${projectId}`, { method: "GET" });
+    const result = await callVizard(`/project/query/${projectId}`, { method: "GET" }, apiKey);
 
     if (result.code === 2000 && Array.isArray(result.videos) && result.videos.length) {
       return result;
@@ -473,12 +542,12 @@ async function pollVizardProject(projectId) {
   throw new Error("Vizard is still processing. Try again later or increase VIZARD_POLL_ATTEMPTS.");
 }
 
-async function callVizard(pathname, options) {
+async function callVizard(pathname, options, apiKey) {
   const response = await fetch(`https://elb-api.vizard.ai/hvizard-server-front/open-api/v1${pathname}`, {
     method: options.method,
     headers: {
       "Content-Type": "application/json",
-      VIZARDAI_API_KEY: vizardApiKey,
+      VIZARDAI_API_KEY: apiKey,
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
