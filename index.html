@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ClipFlow Studio</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Workspace">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M4 6.4A2.4 2.4 0 0 1 6.4 4h11.2A2.4 2.4 0 0 1 20 6.4v11.2a2.4 2.4 0 0 1-2.4 2.4H6.4A2.4 2.4 0 0 1 4 17.6V6.4Z"></path>
+              <path d="M9 8.2v7.6l6-3.8-6-3.8Z"></path>
+            </svg>
+          </span>
+          <span>
+            <strong>ClipFlow</strong>
+            <small>Short-form studio</small>
+          </span>
+        </div>
+
+        <nav class="nav-list" aria-label="Primary">
+          <a class="nav-item active" href="#studio">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H4V5Zm3 13h10v2H7v-2Z"></path></svg>
+            Studio
+          </a>
+          <a class="nav-item" href="#accounts">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 10a4 4 0 1 1 8 0 4 4 0 0 1-8 0Zm-3 9a7 7 0 0 1 14 0v1H5v-1Z"></path></svg>
+            Accounts
+          </a>
+          <a class="nav-item" href="#vizard-library">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v4H4V5Zm0 6h7v8H4v-8Zm9 0h7v8h-7v-8Z"></path></svg>
+            Videos
+          </a>
+          <a class="nav-item" href="#google-drive">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+            </svg>
+            Google Drive
+          </a>
+          <a class="nav-item" href="#queue">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v3H5V5Zm0 5h14v3H5v-3Zm0 5h10v3H5v-3Z"></path></svg>
+            Queue
+          </a>
+        </nav>
+
+        <div class="sidebar-stat">
+          <span>Approved clips</span>
+          <strong id="approvedCount">0</strong>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Campaign workspace</p>
+            <h1>Turn long videos into scheduled TikToks, Reels, and YouTube Shorts.</h1>
+          </div>
+          <div class="topbar-actions">
+            <span class="status-pill" id="readinessPill">Setup needed</span>
+            <button class="icon-button" id="resetDemo" type="button" title="Reset demo">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.8 6.8A7.5 7.5 0 1 1 4.5 12H2l3.5-3.5L9 12H6.5a5.5 5.5 0 1 0 1.6-3.9L6.8 6.8Z"></path></svg>
+            </button>
+          </div>
+        </header>
+
+        <section class="studio-grid" id="studio">
+          <form class="panel intake-panel" id="sourceForm">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Source</p>
+                <h2>Video intake</h2>
+              </div>
+              <span class="compact-badge">MVP</span>
+            </div>
+
+            <label class="field">
+              <span>YouTube URL</span>
+              <input id="youtubeUrl" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+            </label>
+
+            <label class="field">
+              <span>Video title</span>
+              <input id="videoTitle" type="text" placeholder="Launch webinar, podcast, tutorial...">
+            </label>
+
+            <div class="dropzone" id="dropzone">
+              <input id="videoFile" type="file" accept="video/*" hidden>
+              <div class="dropzone-actions">
+                <button class="secondary-button" id="chooseFile" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v8h3l-4 4-4-4h3V4ZM5 18h14v2H5v-2Z"></path></svg>
+                  Select video
+                </button>
+                <button class="danger-button" id="clearVideo" type="button" data-testid="clear-video">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8l1 2h4v2H3V6h4l1-2Zm-2 6h12l-.8 10H6.8L6 10Zm4 2v6h2v-6h-2Zm4 0v6h2v-6h-2Z"></path></svg>
+                  Delete video
+                </button>
+              </div>
+              <span id="fileName">No file selected</span>
+            </div>
+
+            <div class="settings-grid">
+              <label class="field">
+                <span>Clipping provider</span>
+                <select id="clippingProvider">
+                  <option value="vizard">Vizard AI</option>
+                  <option value="local">Local FFmpeg</option>
+                  <option value="demo">Demo mode</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Language</span>
+                <select id="videoLanguage">
+                  <option value="auto">Auto detect</option>
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Clip count</span>
+                <input id="clipCount" type="number" min="2" max="12" value="6">
+              </label>
+              <label class="field">
+                <span>Min seconds</span>
+                <input id="minSeconds" type="number" min="8" max="90" value="18">
+              </label>
+              <label class="field">
+                <span>Max seconds</span>
+                <input id="maxSeconds" type="number" min="12" max="180" value="58">
+              </label>
+              <label class="field">
+                <span>Caption style</span>
+                <select id="captionStyle">
+                  <option>Clean creator</option>
+                  <option>Bold subtitles</option>
+                  <option>Podcast pullquote</option>
+                  <option>Product demo</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <label><input id="autoCaptions" type="checkbox" checked> Auto captions</label>
+              <label><input id="brandSafe" type="checkbox" checked> Brand safe</label>
+              <label><input id="verticalCrop" type="checkbox" checked> 9:16 crop</label>
+            </div>
+
+            <button class="primary-button" data-testid="generate-clips" type="submit">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 1.5 5.1L19 8.6l-5.5 1.5L12 15l-1.5-4.9L5 8.6l5.5-1.5L12 2Zm6 12 1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3ZM5 14l.8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14Z"></path></svg>
+              Generate clip set
+            </button>
+            <p class="status-note" id="clipStatus">Select a video file to cut real clips locally.</p>
+          </form>
+
+          <section class="clip-section" aria-labelledby="clipHeading">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">AI candidates</p>
+                <h2 id="clipHeading">Clip desk</h2>
+              </div>
+              <div class="segmented-control" aria-label="Clip filter">
+                <button class="active" type="button" data-filter="all">All</button>
+                <button type="button" data-filter="approved">Approved</button>
+                <button type="button" data-filter="review">Review</button>
+              </div>
+            </div>
+            <div class="clip-grid" id="clipGrid"></div>
+          </section>
+        </section>
+
+        <section class="accounts-section panel" id="accounts">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Distribution</p>
+              <h2>Accounts</h2>
+            </div>
+            <div class="account-actions">
+              <a class="mini-button" href="https://vizard.ai/settings/social-accounts" target="_blank" rel="noreferrer">Link</a>
+              <button class="icon-button" id="syncAccounts" type="button" title="Sync Vizard accounts">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.8 6.8A7.5 7.5 0 0 1 19.5 12H22l-3.5 3.5L15 12h2.5a5.5 5.5 0 0 0-9.4-3.9L6.8 6.8Zm10.4 10.4A7.5 7.5 0 0 1 4.5 12H2l3.5-3.5L9 12H6.5a5.5 5.5 0 0 0 9.4 3.9l1.3 1.3Z"></path></svg>
+              </button>
+            </div>
+          </div>
+          <div class="account-list" id="accountList"></div>
+        </section>
+
+        <section class="library-section panel" id="vizard-library">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Vizard</p>
+              <h2>Generated videos</h2>
+            </div>
+            <div class="library-actions">
+              <a class="mini-button" href="https://vizard.ai/projects" target="_blank" rel="noreferrer">Projects</a>
+              <button class="secondary-button" id="refreshVizardLibrary" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.8 6.8A7.5 7.5 0 0 1 19.5 12H22l-3.5 3.5L15 12h2.5a5.5 5.5 0 0 0-9.4-3.9L6.8 6.8Zm10.4 10.4A7.5 7.5 0 0 1 4.5 12H2l3.5-3.5L9 12H6.5a5.5 5.5 0 0 0 9.4 3.9l1.3 1.3Z"></path></svg>
+                Refresh
+              </button>
+            </div>
+          </div>
+          <div class="segmented-control" id="vizardImportMode" aria-label="Vizard import mode" style="margin-bottom: 14px; max-width: 320px;">
+            <button class="active" type="button" data-mode="api" style="flex: 1; text-align: center; padding: 6px 12px; font-size: 0.825rem;">API Retrieval</button>
+            <button type="button" data-mode="manual" style="flex: 1; text-align: center; padding: 6px 12px; font-size: 0.825rem;">Direct Link Ingest</button>
+          </div>
+
+          <form class="library-import" id="vizardProjectForm">
+            <label class="field">
+              <span>Project ID or Vizard URL</span>
+              <input id="vizardProjectInput" type="text" placeholder="Paste a Vizard project ID or project link" autocomplete="off">
+            </label>
+            <button class="primary-button" id="importVizardProject" type="submit">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v8h3l-4 4-4-4h3V4ZM5 18h14v2H5v-2Z"></path></svg>
+              Retrieve
+            </button>
+          </form>
+
+          <form id="vizardDirectLinkForm" style="display: none; flex-direction: column; gap: 12px; margin-bottom: 2px; background: var(--panel-strong); border: 1px solid var(--line); padding: 16px; border-radius: var(--radius);">
+            <div style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 4px;">
+              <label class="field" style="display: flex; flex-direction: column; gap: 6px;">
+                <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 500;">Clip Title</span>
+                <input id="vizardDirectTitle" type="text" placeholder="e.g. My Best Short Video" required autocomplete="off" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: var(--ink);">
+              </label>
+              <label class="field" style="display: flex; flex-direction: column; gap: 6px;">
+                <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 500;">Vizard Video / Share URL</span>
+                <input id="vizardDirectUrl" type="url" placeholder="Paste direct .mp4 link, Vizard share, or editor link" required autocomplete="off" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: var(--ink);">
+              </label>
+              <label class="field" style="display: flex; flex-direction: column; gap: 6px;">
+                <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 500;">Caption or Transcript (Optional)</span>
+                <textarea id="vizardDirectCaption" rows="2" placeholder="Write caption or copy-paste clip transcript here..." style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); resize: vertical; font-family: inherit; font-size: inherit;"></textarea>
+              </label>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap;">
+              <span style="font-color: var(--muted); font-size: 0.75rem; max-width: 250px; color: var(--muted); text-align: left; line-height: 1.25; margin-right: auto;">
+                Tip: Direct link extracts Vizard Video IDs automatically so you can still publish to social accounts!
+              </span>
+              <button class="primary-button" type="submit" style="display: inline-flex; align-items: center; gap: 8px;">
+                <svg viewBox="0 0 24 24" aria-hidden="true" style="width: 16px; height: 16px; fill: currentColor;"><path d="M11 4h2v8h3l-4 4-4-4h3V4ZM5 18h14v2H5v-2Z"></path></svg>
+                Add clip
+              </button>
+            </div>
+          </form>
+          <div class="library-list" id="vizardLibrary"></div>
+        </section>
+
+        <section class="library-section panel" id="google-drive">
+          <div class="panel-heading" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <div>
+              <p class="eyebrow">Cloud Synchronization</p>
+              <h2>Google Drive Backup</h2>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="secondary-button" id="refreshGDrive" type="button" style="display: none; height: 32px; padding: 0 12px; font-size: 0.8rem;">
+                Refresh
+              </button>
+              <button class="secondary-button" id="gdriveLogout" type="button" style="display: none; height: 32px; padding: 0 12px; font-size: 0.8rem;">
+                Sign Out
+              </button>
+            </div>
+          </div>
+
+          <div class="gdrive-container" id="gdriveContainer">
+            <div class="empty-state" style="padding: 32px 16px; text-align: center;">
+              <h3>Access Synced Videos</h3>
+              <p style="margin-bottom: 20px; color: var(--muted);">Sign in with Google to browse and play MP4 files synced from Vizard directly in ClipFlow.</p>
+              
+              <button class="gsi-material-button" id="gdriveLoginBtn" type="button" style="align-self: center; background-color: white; border: 1px solid #747775; border-radius: 4px; box-sizing: border-box; color: #1f1f1f; cursor: pointer; font-family: 'Open Sans', arial, sans-serif; font-size: 14px; font-weight: 500; height: 40px; justify-content: center; letter-spacing: 0.25px; outline: none; overflow: hidden; padding: 0 12px; position: relative; text-align: center; transition: background-color .218s, border-color .218s, box-shadow .218s; user-select: none; -webkit-user-select: none; width: auto; display: inline-flex; align-items: center; gap: 8px;">
+                <div class="gsi-material-button-icon" style="height: 20px; min-width: 20px; width: 20px; display: flex; align-items: center; justify-content: center;">
+                  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" style="display: block; width: 20px; height: 20px;">
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
+                  </svg>
+                </div>
+                <span class="gsi-material-button-contents" style="font-family: inherit; font-size: inherit; font-weight: inherit;">Sign in with Google</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="queue-section" id="queue">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Publishing</p>
+              <h2>Queue</h2>
+            </div>
+            <button class="primary-button" id="scheduleApproved" type="button" data-testid="schedule-approved">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12 20 4l-3.2 16-4.5-5.2-5.3 3.1 1.7-6.3L4 12Zm6.3-.9-.8 2.9 2.2-1.3 2.2 2.6 1.6-7.7-5.2 3.5Z"></path></svg>
+              Publish approved
+            </button>
+          </div>
+          <div class="queue-table" id="queueTable"></div>
+        </section>
+      </main>
+    </div>
+
+    <template id="emptyStateTemplate">
+      <div class="empty-state">
+        <div class="preview-stack" aria-hidden="true">
+          <div class="preview-phone one"></div>
+          <div class="preview-phone two"></div>
+          <div class="preview-phone three"></div>
+        </div>
+        <h3>No clips generated yet</h3>
+        <p>Add a source video and generate a clip set.</p>
+      </div>
+    </template>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
