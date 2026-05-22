@@ -132,6 +132,19 @@ const elements = {
   refreshGDrive: document.querySelector("#refreshGDrive"),
   gdriveLogout: document.querySelector("#gdriveLogout"),
   vizardAccountsContainer: document.querySelector("#vizardAccountsContainer"),
+  selectAllClips: document.querySelector("#selectAllClips"),
+  clearClipSelection: document.querySelector("#clearClipSelection"),
+  clipSelectionCount: document.querySelector("#clipSelectionCount"),
+  bulkPublishRedirect: document.querySelector("#bulkPublishRedirect"),
+  publishBackToDeskBtn: document.querySelector("#publishBackToDeskBtn"),
+  publishBulkBtn: document.querySelector("#publishBulkBtn"),
+  publishListContainer: document.querySelector("#publishListContainer"),
+  toggleDirectTikTokBtn: document.querySelector("#toggleDirectTikTokBtn"),
+  directTikTokForm: document.querySelector("#directTikTokForm"),
+  directTikTokUsername: document.querySelector("#directTikTokUsername"),
+  directTikTokToken: document.querySelector("#directTikTokToken"),
+  cancelDirectTikTok: document.querySelector("#cancelDirectTikTok"),
+  saveDirectTikTok: document.querySelector("#saveDirectTikTok"),
 };
 
 hydrateForm();
@@ -253,8 +266,9 @@ function handleRouting() {
   const secGDrive = document.querySelector("#google-drive");
   const secQueue = document.querySelector("#queue");
   const secVizardLibrary = document.querySelector("#vizard-library");
+  const secPublish = document.querySelector("#publish");
 
-  const allSections = [secStudio, secAccounts, secVizardAccounts, secGDrive, secQueue, secVizardLibrary];
+  const allSections = [secStudio, secAccounts, secVizardAccounts, secGDrive, secQueue, secVizardLibrary, secPublish];
   allSections.forEach(s => { if (s) s.style.display = "none"; });
 
   // Update nav highlight
@@ -274,6 +288,9 @@ function handleRouting() {
     if (secGDrive) secGDrive.style.display = "grid";
   } else if (hash === "#queue") {
     if (secQueue) secQueue.style.display = "grid";
+  } else if (hash === "#publish") {
+    if (secPublish) secPublish.style.display = "flex";
+    renderPublishWorkspace();
   }
 }
 
@@ -348,6 +365,14 @@ elements.clipGrid.addEventListener("click", async (event) => {
 elements.accountList.addEventListener("click", (event) => {
   const action = event.target.closest("[data-account-action]");
   if (!action) return;
+
+  if (action.dataset.accountAction === "remove-direct") {
+    state.accounts = state.accounts.filter(item => item.id !== action.dataset.accountId);
+    saveAndRender();
+    setClipStatus("Direct account removed successfully.", "ready");
+    return;
+  }
+
   const account = state.accounts.find((item) => item.id === action.dataset.accountId);
   if (!account) return;
 
@@ -357,6 +382,86 @@ elements.accountList.addEventListener("click", (event) => {
 
   saveAndRender();
 });
+
+if (elements.toggleDirectTikTokBtn && elements.directTikTokForm) {
+  elements.toggleDirectTikTokBtn.addEventListener("click", () => {
+    const isHidden = elements.directTikTokForm.style.display === "none";
+    elements.directTikTokForm.style.display = isHidden ? "block" : "none";
+    
+    // Auto-setup toggles check
+    const modeRadios = document.querySelectorAll('input[name="directTikTokMode"]');
+    const apiFields = document.querySelector("#directTikTokApiFields");
+    
+    if (modeRadios && apiFields) {
+      modeRadios.forEach(radio => {
+        radio.addEventListener("change", (e) => {
+          apiFields.style.display = e.target.value === "api" ? "flex" : "none";
+        });
+      });
+    }
+  });
+}
+
+if (elements.cancelDirectTikTok && elements.directTikTokForm) {
+  elements.cancelDirectTikTok.addEventListener("click", () => {
+    elements.directTikTokForm.style.display = "none";
+    elements.directTikTokUsername.value = "";
+    elements.directTikTokToken.value = "";
+    const apiFields = document.querySelector("#directTikTokApiFields");
+    if (apiFields) apiFields.style.display = "none";
+    const defaultRadio = document.querySelector('input[name="directTikTokMode"][value="assistant"]');
+    if (defaultRadio) defaultRadio.checked = true;
+  });
+}
+
+if (elements.saveDirectTikTok && elements.directTikTokForm) {
+  elements.saveDirectTikTok.addEventListener("click", () => {
+    let username = elements.directTikTokUsername.value.trim();
+    const token = elements.directTikTokToken.value.trim();
+    const modeInput = document.querySelector('input[name="directTikTokMode"]:checked');
+    const directMode = modeInput ? modeInput.value : "assistant";
+
+    if (!username) {
+      setClipStatus("Please enter your TikTok username/handle.", "error");
+      return;
+    }
+
+    if (!username.startsWith("@")) {
+      username = `@${username}`;
+    }
+
+    const isAssistant = directMode === "assistant";
+
+    const newAccount = {
+      id: `direct-tiktok-${Date.now()}`,
+      platform: "TikTok",
+      handle: username,
+      audience: isAssistant ? "Smart Assistant (Cert-free)" : "Direct Posting (API)",
+      connected: true,
+      enabled: true,
+      review: isAssistant ? "No developer approval needed" : (token ? "Linked directly via API token" : "Linked via Sandbox / Simulation Mode"),
+      gate: "ready",
+      provider: "direct",
+      directMode: directMode, // "assistant" or "api"
+      directToken: token,
+    };
+
+    if (!state.accounts) state.accounts = [];
+    state.accounts.push(newAccount);
+    saveAndRender();
+
+    // Reset Form
+    elements.directTikTokForm.style.display = "none";
+    elements.directTikTokUsername.value = "";
+    elements.directTikTokToken.value = "";
+    const apiFields = document.querySelector("#directTikTokApiFields");
+    if (apiFields) apiFields.style.display = "none";
+    const defaultRadio = document.querySelector('input[name="directTikTokMode"][value="assistant"]');
+    if (defaultRadio) defaultRadio.checked = true;
+
+    setClipStatus(`Direct TikTok account ${username} added successfully!`, "ready");
+  });
+}
 
 elements.accountList.addEventListener("change", (event) => {
   const input = event.target.closest("[data-account-enabled]");
@@ -597,6 +702,7 @@ function createInitialState() {
     queue: [],
     vizardApiAccounts: [],
     activeVizardAccountId: "system",
+    selectedClipIds: [],
   };
 }
 
@@ -690,6 +796,7 @@ function render() {
   renderQueue();
   renderCounters();
   renderGDrive();
+  updateSelectionCounter();
 }
 
 function renderClips() {
@@ -703,11 +810,21 @@ function renderClips() {
 
   clips.forEach((clip) => {
     const article = document.createElement("article");
+    const isSelected = state.selectedClipIds && state.selectedClipIds.includes(clip.id);
     article.className = `clip-card ${clip.approved ? "approved" : "review"}`;
+    if (isSelected) {
+      article.classList.add("selected-card");
+      article.style.border = "2px solid #553c9a";
+      article.style.background = "rgba(99, 102, 241, 0.04)";
+    } else {
+      article.style.border = "";
+      article.style.background = "";
+    }
+
     const videoSrc = assetUrl(clip.videoUrl || clip.clipEditorUrl);
     const isBackedUp = (state.gdriveBackedUpUrls && state.gdriveBackedUpUrls.includes(clip.videoUrl)) || clip.gdriveBackedUp || (clip.videoUrl && state.gdriveBackedUpUrls?.includes(clip.videoUrl));
     
-    const media = clip.videoUrl
+    const rawMedia = clip.videoUrl
       ? `<div class="click-to-play-wrapper" data-video-src="${escapeHtml(videoSrc)}" data-editor-url="${escapeHtml(clip.clipEditorUrl || clip.videoUrl)}" style="position: relative; width: 100%; height: 180px; overflow: hidden; background: #0f172a; border-radius: 6px 6px 0 0; display: flex; align-items: center; justify-content: center; cursor: pointer;">
           ${clip.thumbUrl ? `<img src="${escapeHtml(assetUrl(clip.thumbUrl))}" style="width: 100%; height: 100%; object-fit: cover; position: absolute; inset: 0;" />` : `<div style="width: 100%; height: 100%; background: linear-gradient(135deg, #1e1b4b, #0f172a); position: absolute; inset: 0;"></div>`}
           <!-- Overlay play container -->
@@ -721,6 +838,18 @@ function renderClips() {
       : `<div class="clip-thumb" style="--thumb-bg: ${clip.thumb}">
           <div class="caption-bars" aria-hidden="true"><span></span><span></span></div>
         </div>`;
+
+    const checkboxHtml = `
+      <div class="clip-checkbox-container" style="position: absolute; top: 6px; left: 6px; z-index: 30; background: rgba(15, 23, 42, 0.85); padding: 4px 6px; border-radius: 4px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); pointer-events: auto;" onclick="event.stopPropagation();">
+        <input type="checkbox" class="clip-select-checkbox" data-clip-id="${clip.id}" ${isSelected ? "checked" : ""} style="width: 14px; height: 14px; cursor: pointer; margin: 0; outline: none;">
+      </div>
+    `;
+
+    const media = `<div class="media-column-wrapper" style="position: relative; width: 100%; height: 100%; min-height: 120px;">
+      ${checkboxHtml}
+      ${rawMedia}
+    </div>`;
+
     article.innerHTML = `
       ${media}
       <div class="clip-body">
@@ -759,7 +888,15 @@ function renderAccounts() {
   elements.accountList.innerHTML = "";
   state.accounts.forEach((account) => {
     const ready = isPublishReadyAccount(account);
-    const actionLabel = account.vizardSocialAccountId ? (ready ? "Connected" : "Reconnect") : "Link";
+    
+    let actionLabel = account.vizardSocialAccountId ? (ready ? "Connected" : "Reconnect") : "Link";
+    let actionAttr = `data-account-action="connect" data-account-id="${account.id}"`;
+    
+    if (account.provider === "direct") {
+      actionLabel = "Remove";
+      actionAttr = `data-account-action="remove-direct" data-account-id="${account.id}"`;
+    }
+
     const row = document.createElement("div");
     row.className = "account-row";
     row.innerHTML = `
@@ -777,7 +914,7 @@ function renderAccounts() {
       </div>
       <div class="account-main">
         <span class="account-meta">${escapeHtml(account.review)}</span>
-        <button class="mini-button ${ready ? "active" : ""}" type="button" data-account-action="connect" data-account-id="${account.id}">
+        <button class="mini-button ${(ready && account.provider !== "direct") ? "active" : ""}" type="button" ${actionAttr}>
           ${actionLabel}
         </button>
       </div>
@@ -943,6 +1080,12 @@ function getFilteredClips() {
 }
 
 function getQueueStatus(account) {
+  if (account.provider === "direct") {
+    if (!account.connected) {
+      return { label: "Reconnect", type: "blocked" };
+    }
+    return { label: "Queued", type: "ready" };
+  }
   if (!account.vizardSocialAccountId) {
     return { label: "Sync Vizard", type: "blocked" };
   }
@@ -1441,7 +1584,7 @@ async function publishApprovedClips() {
 
 function createPublishJob(clip, account) {
   const accountStatus = getQueueStatus(account);
-  const missingClipId = !clip.vizardVideoId;
+  const missingClipId = !clip.vizardVideoId && !clip.videoUrl;
   const blocked = accountStatus.type === "blocked" || missingClipId;
 
   return {
@@ -1451,23 +1594,158 @@ function createPublishJob(clip, account) {
     platform: account.platform,
     handle: account.handle,
     finalVideoId: clip.vizardVideoId || "",
+    videoUrl: clip.videoUrl || "",
     socialAccountId: account.vizardSocialAccountId || "",
+    provider: account.provider || "vizard",
+    directMode: account.directMode || "assistant",
+    directToken: account.directToken || "",
     post: clip.caption || clip.title || "",
     title: clip.title || clip.caption || "Short video",
-    status: missingClipId ? "Vizard clip needed" : accountStatus.label,
+    status: missingClipId ? "Video source needed" : accountStatus.label,
     statusType: blocked ? "blocked" : "ready",
     scheduledFor: "Now",
   };
 }
 
 async function publishJob(job) {
+  let finalVideoUrl = job.videoUrl;
+  if (finalVideoUrl && (finalVideoUrl.startsWith("/") || finalVideoUrl.startsWith("./") || !finalVideoUrl.startsWith("http"))) {
+    const relativePath = finalVideoUrl.replace(/^\.?\//, "");
+    finalVideoUrl = `${window.location.origin}/${relativePath}`;
+  }
+
+  if (job.provider === "direct" && job.directMode === "assistant") {
+    // 1. Copy caption text to clipboard automatically
+    try {
+      await navigator.clipboard.writeText(job.post);
+    } catch (clipErr) {
+      console.warn("Unable to write caption to clipboard:", clipErr);
+    }
+
+    // 2. Open TikTok creator upload page in a new window immediately
+    const popupSuccess = window.open("https://www.tiktok.com/upload", "_blank");
+
+    // 3. Initiate programmatic anchor click download for the video clip
+    try {
+      const res = await fetch(finalVideoUrl);
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      const sanitizedTitle = (job.title || "tiktok_clip").replace(/[^a-zA-Z0-9_-]/g, "_");
+      a.download = `${sanitizedTitle}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      // CORS or network fallback
+      const a = document.createElement("a");
+      a.href = finalVideoUrl;
+      a.target = "_blank";
+      const sanitizedTitle = (job.title || "tiktok_clip").replace(/[^a-zA-Z0-9_-]/g, "_");
+      a.download = `${sanitizedTitle}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    // 4. Inject aesthetic onboarding helper modal in ClipFlow workspace
+    const modal = document.createElement("div");
+    modal.id = "smartAssistantModal";
+    modal.style.cssText = "position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 10000; padding: 16px;";
+    
+    modal.innerHTML = `
+      <div style="background: #111116; border: 2px solid #25f4f1; border-radius: 12px; width: 100%; max-width: 465px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.8); font-family: system-ui, sans-serif; color: #fff; text-align: left;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 18px;">
+          <div style="background: rgba(37, 244, 241, 0.1); width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 1px solid #25f4f1;">
+            <svg viewBox="0 0 24 24" style="width: 24px; height: 24px; fill: #25f4f1;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          </div>
+          <div>
+            <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: #fff;">Smart Assistant Active</h3>
+            <p style="margin: 2px 0 0 0; font-size: 0.75rem; color: #25f4f1; text-transform: uppercase; letter-spacing: 0.5px;">TikTok Direct Post Bypass</p>
+          </div>
+        </div>
+        
+        <p style="margin: 0 0 16px 0; font-size: 0.88rem; color: rgba(255,255,255,0.8); line-height: 1.5;">
+          Your video <strong>"${escapeHtml(job.title)}"</strong> is ready to post to <strong>${escapeHtml(job.handle)}</strong> bypassing other API certification blocks!
+        </p>
+
+        <div style="background: rgba(37, 244, 241, 0.05); border: 1px solid rgba(37, 244, 241, 0.15); border-radius: 8px; padding: 14px; margin-bottom: 20px; font-size: 0.82rem; display: flex; flex-direction: column; gap: 10px; line-height: 1.4;">
+          <div style="display: flex; gap: 8px; align-items: flex-start;">
+            <span style="font-weight: 800; color: #25f4f1;">✓</span>
+            <span><strong>Video download started:</strong> The short clip has been saved to your downloads list.</span>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: flex-start;">
+            <span style="font-weight: 800; color: #25f4f1;">✓</span>
+            <div>
+              <strong>Caption copied to clipboard:</strong>
+              <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 4px; margin-top: 4px; color: #25f4f1; font-family: monospace; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 350px;">
+                ${escapeHtml(job.post || "Clip Title")}
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: flex-start;">
+            <span style="font-weight: 800; color: #25f4f1;">!</span>
+            <span><strong>To publish:</strong> Drag & drop the downloaded file in the newly opened tab, and hit Ctrl+V.</span>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+          <button id="closeSmartAssistant" style="background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #fff; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 500;">
+            Close Assistant
+          </button>
+          <button id="reopenTikTokTab" style="background: #25f4f1; border: none; color: #000; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 700;">
+            Open TikTok Upload ↗
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    modal.querySelector("#closeSmartAssistant").addEventListener("click", () => {
+      document.body.removeChild(modal);
+    });
+
+    modal.querySelector("#reopenTikTokTab").addEventListener("click", () => {
+      window.open("https://www.tiktok.com/upload", "_blank");
+    });
+
+    return;
+  }
+
+  if (job.provider === "direct") {
+    const response = await fetch(apiUrl("/api/tiktok/publish"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        videoUrl: finalVideoUrl,
+        post: job.post,
+        title: job.title,
+        handle: job.handle,
+        directToken: job.directToken || "",
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || "TikTok Direct Publishing failed.");
+    }
+    return;
+  }
+
   const response = await fetch(apiUrl("/api/vizard/publish"), {
     method: "POST",
     headers: getVizardHeaders({
       "Content-Type": "application/json",
     }),
     body: JSON.stringify({
-      finalVideoId: job.finalVideoId,
+      finalVideoId: job.finalVideoId || undefined,
+      videoUrl: finalVideoUrl || undefined,
       socialAccountId: job.socialAccountId,
       post: job.post,
       title: job.title,
@@ -1477,6 +1755,14 @@ async function publishJob(job) {
 
   if (!response.ok) {
     throw new Error(data.error || "Vizard could not publish this post.");
+  }
+
+  if (data.vizardVideoId && job.clipId) {
+    const clipIndex = state.clips.findIndex(c => c.id === job.clipId);
+    if (clipIndex !== -1) {
+      state.clips[clipIndex].vizardVideoId = String(data.vizardVideoId);
+      saveAndRender();
+    }
   }
 }
 
@@ -1534,6 +1820,9 @@ function formatVizardExpiry(expiresAt) {
 }
 
 function isPublishReadyAccount(account) {
+  if (account.provider === "direct") {
+    return Boolean(account.connected && account.gate === "ready");
+  }
   return Boolean(account.vizardSocialAccountId && account.connected && account.gate === "ready");
 }
 
@@ -1942,6 +2231,23 @@ async function ensureFirebaseInitialized() {
       onAuthStateChanged(auth, async (user) => {
         if (user) {
           googleUser = user;
+          const storedToken = localStorage.getItem("clipflow_gdrive_access_token");
+          const storedUser = localStorage.getItem("clipflow_google_user");
+          const storedTimestamp = localStorage.getItem("clipflow_gdrive_token_timestamp");
+          if (storedToken && storedUser && storedTimestamp) {
+            const ageMs = Date.now() - parseInt(storedTimestamp, 10);
+            if (ageMs < 50 * 60 * 1000) {
+              cachedAccessToken = storedToken;
+              try {
+                googleUser = JSON.parse(storedUser);
+              } catch (e) {}
+              triggerGDriveLoad().catch(e => console.warn("Background GDrive loading error on restore:", e));
+            } else {
+              localStorage.removeItem("clipflow_gdrive_access_token");
+              localStorage.removeItem("clipflow_google_user");
+              localStorage.removeItem("clipflow_gdrive_token_timestamp");
+            }
+          }
         } else {
           googleUser = null;
           cachedAccessToken = null;
@@ -2290,6 +2596,9 @@ async function fetchGDriveFiles() {
     const folderRes = await fetch(folderUrl, { headers: { Authorization: `Bearer ${cachedAccessToken}` } });
     if (folderRes.status === 401) {
       cachedAccessToken = null;
+      localStorage.removeItem("clipflow_gdrive_access_token");
+      localStorage.removeItem("clipflow_google_user");
+      localStorage.removeItem("clipflow_gdrive_token_timestamp");
       throw new Error("Session expired or unauthorized. Please sign in again.");
     }
     const folderData = folderRes.ok ? await folderRes.json() : { files: [] };
@@ -2580,7 +2889,7 @@ async function renderGDrive() {
     innerHTML = `
       <div class="library-video-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
         ${gdriveFiles.map((file) => {
-          const proxyUrl = `/api/proxy-video?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
+          const proxyUrl = `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
           const dateStr = formatProjectDate(file.modifiedTime);
           const sizeCalculated = file.size ? `${(parseInt(file.size) / (1024 * 1024)).toFixed(1)} MB` : "Size unknown";
           
@@ -2750,6 +3059,16 @@ async function handleGDriveLogin() {
     if (credential && credential.accessToken) {
       cachedAccessToken = credential.accessToken;
       googleUser = result.user;
+      
+      localStorage.setItem("clipflow_gdrive_access_token", cachedAccessToken);
+      localStorage.setItem("clipflow_google_user", JSON.stringify({
+        displayName: googleUser.displayName,
+        email: googleUser.email,
+        uid: googleUser.uid,
+        photoURL: googleUser.photoURL
+      }));
+      localStorage.setItem("clipflow_gdrive_token_timestamp", Date.now().toString());
+
       gdriveError = null;
       await triggerGDriveLoad();
       // Auto-upload existing non-backed-up clips in the active list
@@ -2776,6 +3095,11 @@ async function handleGDriveLogout() {
     cachedAccessToken = null;
     gdriveFiles = [];
     gdriveError = null;
+    
+    localStorage.removeItem("clipflow_gdrive_access_token");
+    localStorage.removeItem("clipflow_google_user");
+    localStorage.removeItem("clipflow_gdrive_token_timestamp");
+    
     renderGDrive();
   } catch (err) {
     console.error("Sign out error:", err);
@@ -2799,6 +3123,9 @@ async function triggerGDriveLoad() {
     gdriveError = err.message || "Failed to scan Google Drive.";
     if (err.message && (err.message.includes("401") || err.message.includes("unauthorized"))) {
       cachedAccessToken = null;
+      localStorage.removeItem("clipflow_gdrive_access_token");
+      localStorage.removeItem("clipflow_google_user");
+      localStorage.removeItem("clipflow_gdrive_token_timestamp");
     }
   } finally {
     isGDriveLoading = false;
@@ -2807,7 +3134,7 @@ async function triggerGDriveLoad() {
 }
 
 function handleGDriveImport(file) {
-  const proxyUrl = `/api/proxy-video?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
+  const proxyUrl = `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
   
   let extra = file.extra || null;
   if (!extra || !Object.keys(extra).length) {
@@ -2917,4 +3244,319 @@ function startVizardBackgroundPolling() {
 
 // Start polling immediately if there are any processing projects loaded from cache
 startVizardBackgroundPolling();
+
+
+/* === CUSTOM PUBLISH WORKSPACE FEATURE === */
+
+function updateSelectionCounter() {
+  state.selectedClipIds = state.selectedClipIds || [];
+  const cnt = state.selectedClipIds.length;
+  if (elements.clipSelectionCount) {
+    elements.clipSelectionCount.textContent = cnt;
+  }
+}
+
+function renderPublishWorkspace() {
+  if (!elements.publishListContainer) return;
+  elements.publishListContainer.innerHTML = "";
+
+  state.selectedClipIds = state.selectedClipIds || [];
+  const selectedClips = state.clips.filter((c) => state.selectedClipIds.includes(c.id));
+
+  if (!selectedClips.length) {
+    elements.publishListContainer.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; background: #161F32; border: 1.5px dashed var(--line); border-radius: 8px; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;">
+        <h3 style="font-size: 1.15rem; font-weight: bold; margin: 0; color: var(--ink);">No videos selected</h3>
+        <p style="color: var(--muted); font-size: 0.85rem; max-width: 320px; margin: 0 auto 12px;">Please return to the Studio panel and select clips from your Clip Desk to configure them for bulk campaign publishing.</p>
+        <button class="primary-button" id="publishGoBackBtn" style="background: #6366f1; border: none; color: white; padding: 8px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; margin: 0 auto; height: auto;">
+          ← Go Select Clips
+        </button>
+      </div>
+    `;
+    if (elements.publishBulkBtn) {
+      elements.publishBulkBtn.disabled = true;
+      elements.publishBulkBtn.style.opacity = "0.5";
+    }
+    return;
+  }
+
+  if (elements.publishBulkBtn) {
+    elements.publishBulkBtn.disabled = false;
+    elements.publishBulkBtn.style.opacity = "1";
+  }
+
+  const enabledAccounts = state.accounts.filter(a => a.enabled);
+
+  selectedClips.forEach((clip) => {
+    const videoSrc = assetUrl(clip.videoUrl || clip.clipEditorUrl);
+    const mediaHtml = clip.videoUrl
+      ? `<div style="position: relative; width: 100%; height: 110px; overflow: hidden; background: #0f172a; border-radius: 6px; display: flex; align-items: center; justify-content: center;">
+          ${clip.thumbUrl ? `<img src="${escapeHtml(assetUrl(clip.thumbUrl))}" style="width: 100%; height: 100%; object-fit: cover; position: absolute; inset: 0;" />` : `<div style="width: 100%; height: 100%; background: linear-gradient(135deg, #1e1b4b, #0f172a); position: absolute; inset: 0;"></div>`}
+        </div>`
+      : `<div class="clip-thumb" style="--thumb-bg: ${clip.thumb}; height: 110px; width: 100%; border-radius: 6px;">
+          <div class="caption-bars" aria-hidden="true"><span></span><span></span></div>
+        </div>`;
+
+    const accountsCheckboxes = enabledAccounts.map((acc) => {
+      const isChecked = clip.platforms && clip.platforms.map(p => p.toLowerCase()).includes(acc.platform.toLowerCase());
+      return `
+        <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink); cursor: pointer; user-select: none; background: rgba(30, 41, 59, 0.4); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px;">
+          <input type="checkbox" class="publish-channel-checkbox" value="${acc.id}" ${isChecked ? "checked" : ""} style="width: 14px; height: 14px; cursor: pointer; margin: 0;">
+          <span>${escapeHtml(acc.platform)} (${escapeHtml(acc.handle)})</span>
+        </label>
+      `;
+    }).join("") || `<span style="font-size: 0.8rem; color: #ef4444; font-weight: 500;">No enabled social accounts found. Link or Enable profiles under the Accounts tab first.</span>`;
+
+    const card = document.createElement("article");
+    card.className = "publish-card";
+    card.dataset.clipId = clip.id;
+    card.setAttribute("style", "display: grid; grid-template-columns: 180px 1fr; gap: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: #161F32; position: relative;");
+    
+    if (window.innerWidth < 640) {
+      card.style.gridTemplateColumns = "1fr";
+    }
+
+    card.innerHTML = `
+      <div class="publish-card-left" style="display: flex; flex-direction: column; gap: 10px; justify-content: space-between;">
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          ${mediaHtml}
+          <div style="font-size: 0.775rem; color: var(--muted); font-family: var(--font-mono); margin-top: 4px; display: flex; justify-content: space-between; flex-wrap: wrap;">
+            <span>${clip.duration}s length</span>
+            <span>★ Score ${clip.score}</span>
+          </div>
+        </div>
+        ${clip.videoUrl ? `<a class="mini-button active" href="${escapeHtml(videoSrc)}" target="_blank" rel="noreferrer" style="font-size: 0.75rem; margin-top: 6px; padding: 4px 0; text-align: center; display: block; border-radius: 4px; text-decoration: none;">View Video ↗</a>` : ""}
+      </div>
+      <div class="publish-card-right" style="display: flex; flex-direction: column; gap: 12px; min-width: 0;">
+        <div class="field" style="margin: 0; display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 0.8rem; font-weight: 600; color: var(--ink);">Short Video Title</span>
+          <input type="text" class="publish-title-input" value="${escapeHtml(clip.title || '')}" style="background: rgba(15, 23, 42, 0.4); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 0.85rem; width: 100%; outline: none;" placeholder="Video Title">
+        </div>
+        <div class="field" style="margin: 0; display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 0.8rem; font-weight: 600; color: var(--ink);">Post Caption & Description</span>
+          <textarea class="publish-caption-input" rows="3" style="background: rgba(15, 23, 42, 0.4); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 0.85rem; width: 100%; outline: none; resize: vertical;" placeholder="Add captions or #hashtags...">${escapeHtml(clip.caption || '')}</textarea>
+        </div>
+        
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <span style="font-size: 0.8rem; font-weight: 600; color: var(--ink);">Post to Channels:</span>
+          <div class="publish-accounts-list" style="display: flex; flex-wrap: wrap; gap: 8px;">
+            ${accountsCheckboxes}
+          </div>
+        </div>
+        
+        <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+          <button type="button" class="mini-button publish-single-btn" data-clip-id="${clip.id}" style="background: #10b981; color: white; border: none; font-weight: 600; padding: 6px 12px; font-size: 0.8rem; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+            🚀 Publish This Video
+          </button>
+        </div>
+      </div>
+    `;
+
+    elements.publishListContainer.appendChild(card);
+  });
+}
+
+async function publishCustomClip(clipId, customTitle, customCaption, selectedAccountIds) {
+  const clip = state.clips.find(c => c.id === clipId);
+  if (!clip) return;
+
+  const targetAccounts = state.accounts.filter(acc => selectedAccountIds.includes(acc.id));
+  if (!targetAccounts.length) {
+    throw new Error("Select at least one social channel.");
+  }
+
+  const updatedClip = {
+    ...clip,
+    title: customTitle,
+    caption: customCaption
+  };
+
+  const newJobs = targetAccounts.map(account => {
+    const job = createPublishJob(updatedClip, account);
+    job.post = customCaption;
+    job.title = customTitle;
+    return job;
+  });
+
+  state.queue = [...newJobs, ...state.queue];
+  saveAndRender();
+
+  for (const job of newJobs) {
+    const activeJob = state.queue.find(j => j.id === job.id);
+    if (!activeJob) continue;
+
+    activeJob.status = "Publishing";
+    activeJob.statusType = "waiting";
+    saveAndRender();
+
+    try {
+      await publishJob(activeJob);
+      activeJob.status = "Published";
+      activeJob.statusType = "ready";
+      activeJob.error = "";
+    } catch (err) {
+      activeJob.status = "Failed";
+      activeJob.statusType = "blocked";
+      activeJob.error = err.message || "Failed to publish.";
+    }
+    saveAndRender();
+  }
+}
+
+async function publishBulkCampaign() {
+  const container = document.querySelector("#publishListContainer");
+  const cards = container.querySelectorAll(".publish-card");
+  if (!cards.length) {
+    setClipStatus("No items selected inside the Publish workspace.", "error");
+    return;
+  }
+
+  setClipStatus("Bulk campaign publishing dispatch initiated...", "ready");
+  
+  if (elements.publishBulkBtn) elements.publishBulkBtn.disabled = true;
+
+  try {
+    for (const card of cards) {
+      const clipId = card.dataset.clipId;
+      const customTitle = card.querySelector(".publish-title-input").value.trim();
+      const customCaption = card.querySelector(".publish-caption-input").value.trim();
+      
+      const checkedBoxes = card.querySelectorAll(".publish-channel-checkbox:checked");
+      const selectedAccountIds = Array.from(checkedBoxes).map(cb => cb.value);
+
+      if (!selectedAccountIds.length) {
+        continue; // skip clip if no channels configured
+      }
+
+      card.style.opacity = "0.75";
+      try {
+        await publishCustomClip(clipId, customTitle, customCaption, selectedAccountIds);
+        if (state.selectedClipIds) {
+          state.selectedClipIds = state.selectedClipIds.filter(id => id !== clipId);
+        }
+        card.style.borderColor = "#10b981";
+        card.style.background = "rgba(16, 185, 129, 0.05)";
+      } catch (err) {
+        card.style.borderColor = "#ef4444";
+        throw err;
+      }
+    }
+
+    setClipStatus("Bulk campaign published successfully! Visit Queue to monitor tasks.", "ready");
+    window.location.hash = "#queue";
+
+  } catch (error) {
+    setClipStatus(`Bulk publication issue: ${error.message}`, "error");
+  } finally {
+    if (elements.publishBulkBtn) elements.publishBulkBtn.disabled = false;
+    updateSelectionCounter();
+    saveAndRender();
+  }
+}
+
+// Global Delegation for selection actions in the Studio Panel
+if (elements.selectAllClips) {
+  elements.selectAllClips.addEventListener("click", () => {
+    const clips = getFilteredClips();
+    state.selectedClipIds = clips.map(c => c.id);
+    saveAndRender();
+  });
+}
+
+if (elements.clearClipSelection) {
+  elements.clearClipSelection.addEventListener("click", () => {
+    state.selectedClipIds = [];
+    saveAndRender();
+  });
+}
+
+if (elements.bulkPublishRedirect) {
+  elements.bulkPublishRedirect.addEventListener("click", () => {
+    state.selectedClipIds = state.selectedClipIds || [];
+    if (!state.selectedClipIds.length) {
+      setClipStatus("Please select clips from the Desk first.", "error");
+      return;
+    }
+    window.location.hash = "#publish";
+  });
+}
+
+if (elements.publishBackToDeskBtn) {
+  elements.publishBackToDeskBtn.addEventListener("click", () => {
+    window.location.hash = "#studio";
+  });
+}
+
+if (elements.publishBulkBtn) {
+  elements.publishBulkBtn.addEventListener("click", async () => {
+    await publishBulkCampaign();
+  });
+}
+
+// Delegation & event capturing for dynamically rendered controls
+document.addEventListener("change", (e) => {
+  if (e.target.classList.contains("clip-select-checkbox")) {
+    const id = e.target.dataset.clipId;
+    state.selectedClipIds = state.selectedClipIds || [];
+    if (e.target.checked) {
+      if (!state.selectedClipIds.includes(id)) {
+        state.selectedClipIds.push(id);
+      }
+    } else {
+      state.selectedClipIds = state.selectedClipIds.filter(item => item !== id);
+    }
+    saveAndRender();
+  }
+});
+
+if (elements.publishListContainer) {
+  elements.publishListContainer.addEventListener("click", async (event) => {
+    const singlePublishBtn = event.target.closest(".publish-single-btn");
+    if (singlePublishBtn) {
+      const clipId = singlePublishBtn.dataset.clipId;
+      const card = singlePublishBtn.closest(".publish-card");
+      if (!card) return;
+
+      const titleInput = card.querySelector(".publish-title-input");
+      const captionInput = card.querySelector(".publish-caption-input");
+      const title = titleInput ? titleInput.value.trim() : "";
+      const caption = captionInput ? captionInput.value.trim() : "";
+
+      const checkedCheckboxes = card.querySelectorAll(".publish-channel-checkbox:checked");
+      const selectedAccountIds = Array.from(checkedCheckboxes).map(cb => cb.value);
+
+      if (!selectedAccountIds.length) {
+        setClipStatus("Please select at least one social channel to publish on.", "error");
+        return;
+      }
+
+      singlePublishBtn.disabled = true;
+      const originalText = singlePublishBtn.innerHTML;
+      singlePublishBtn.innerHTML = "Publishing...";
+
+      try {
+        await publishCustomClip(clipId, title, caption, selectedAccountIds);
+        setClipStatus(`Successfully published "${title}"! Check the Queue.`, "ready");
+        card.style.borderColor = "#10b981";
+        card.style.background = "rgba(16, 185, 129, 0.04)";
+        if (state.selectedClipIds) {
+          state.selectedClipIds = state.selectedClipIds.filter(id => id !== clipId);
+        }
+        updateSelectionCounter();
+      } catch (err) {
+        setClipStatus(`Failed to publish: ${err.message}`, "error");
+        card.style.borderColor = "#ef4444";
+      } finally {
+        singlePublishBtn.disabled = false;
+        singlePublishBtn.innerHTML = originalText;
+        saveAndRender();
+      }
+    }
+
+    const goBackBtn = event.target.closest("#publishGoBackBtn");
+    if (goBackBtn) {
+      window.location.hash = "#studio";
+    }
+  });
+}
 

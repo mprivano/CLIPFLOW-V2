@@ -45,6 +45,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v3H5V5Zm0 5h14v3H5v-3Zm0 5h10v3H5v-3Z"></path></svg>
             Queue
           </a>
+          <a class="nav-item" href="#publish">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+            Publish
+          </a>
         </nav>
 
         <div class="sidebar-stat">
@@ -174,7 +178,16 @@
 
             <!-- Content Container -->
             <div style="display: flex; flex-direction: column; gap: 14px;">
-              <span class="status-note" style="font-size: 0.8rem; color: var(--muted); margin-bottom: -4px;">Candidate short clips currently loaded.</span>
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: -4px;">
+                <span class="status-note" style="font-size: 0.8rem; color: var(--muted);">Candidate short clips currently loaded.</span>
+                <div id="clipDeskSelectionBar" style="display: flex; align-items: center; gap: 8px;">
+                  <button type="button" id="selectAllClips" class="mini-button" style="padding: 4px 8px; font-size: 0.75rem; height: 28px; line-height: 1;">Select All</button>
+                  <button type="button" id="clearClipSelection" class="mini-button" style="padding: 4px 8px; font-size: 0.75rem; height: 28px; line-height: 1;">Clear</button>
+                  <button type="button" id="bulkPublishRedirect" class="primary-button" style="height: 28px; padding: 0 12px; font-size: 0.75rem; font-weight: 600; margin: 0; background: #6366f1; border: none; border-radius: 4px; color: white; display: inline-flex; align-items: center; gap: 4px;">
+                    Publish Selected (<span id="clipSelectionCount">0</span>)
+                  </button>
+                </div>
+              </div>
               <div class="clip-grid" id="clipGrid"></div>
             </div>
           </section>
@@ -203,12 +216,58 @@
               <h2>Accounts</h2>
             </div>
             <div class="account-actions">
+              <button class="mini-button animate-subtle" id="toggleDirectTikTokBtn" type="button" style="background-color: #25f4f1; color: #000; border: none; font-weight: 600;" title="Link TikTok Direct API bypass Vizard">
+                + Direct TikTok
+              </button>
               <a class="mini-button" href="https://vizard.ai/settings/social-accounts" target="_blank" rel="noreferrer">Link</a>
               <button class="icon-button" id="syncAccounts" type="button" title="Sync Vizard accounts">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.8 6.8A7.5 7.5 0 0 1 19.5 12H22l-3.5 3.5L15 12h2.5a5.5 5.5 0 0 0-9.4-3.9L6.8 6.8Zm10.4 10.4A7.5 7.5 0 0 1 4.5 12H2l3.5-3.5L9 12H6.5a5.5 5.5 0 0 0 9.4 3.9l1.3 1.3Z"></path></svg>
               </button>
             </div>
           </div>
+
+          <!-- Direct TikTok Expandable Connection Form -->
+          <div id="directTikTokForm" class="panel-sub-card" style="display: none; background: rgba(37, 244, 241, 0.05); border: 1px solid rgba(37, 244, 241, 0.3); padding: 12px; border-radius: var(--radius); margin-bottom: 12px; font-size: 13px;">
+            <p style="margin: 0 0 8px 0; font-weight: 600; color: #25f4f1;">Add TikTok Direct Creator Channel</p>
+            <div style="display: grid; gap: 10px;">
+              <div style="display: flex; gap: 12px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px; margin-bottom: 4px;">
+                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                  <input type="radio" name="directTikTokMode" value="assistant" checked style="accent-color: #25f4f1;">
+                  <div style="display: flex; flex-direction: column;">
+                    <span style="font-weight: 600;">Smart Assistant Mode</span>
+                    <span style="font-size: 10px; color: var(--muted); line-height: 1.1;">No TikTok certification needed. Downloads video, copies caption, & opens TikTok!</span>
+                  </div>
+                </label>
+              </div>
+              <div style="display: flex; gap: 12px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px; margin-bottom: 4px;">
+                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                  <input type="radio" name="directTikTokMode" value="api" style="accent-color: #25f4f1;">
+                  <div style="display: flex; flex-direction: column;">
+                    <span style="font-weight: 600;">Developer API Upload</span>
+                    <span style="font-size: 10px; color: var(--muted); line-height: 1.1;">Uses Direct Content Posting API. Requires TikTok API integration app credentials.</span>
+                  </div>
+                </label>
+              </div>
+              
+              <label class="field" style="margin: 0;">
+                <span style="font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; display: block;">TikTok Creator Handle</span>
+                <input id="directTikTokUsername" type="text" placeholder="@tiktok_creator" style="background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: #fff; padding: 6px 10px; border-radius: 4px; width: 100%;">
+              </label>
+              
+              <div id="directTikTokApiFields" style="display: none; flex-direction: column; gap: 8px;">
+                <label class="field" style="margin: 0;">
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; display: block;">Custom API Creator Access Token</span>
+                  <input id="directTikTokToken" type="password" placeholder="Defaults to Simulation Sandboxed key if empty" style="background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: #fff; padding: 6px 10px; border-radius: 4px; width: 100%;">
+                </label>
+              </div>
+
+              <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px;">
+                <button type="button" class="mini-button" id="cancelDirectTikTok" style="background: transparent; border: 1px solid var(--line); color: #fff; padding: 4px 8px;">Cancel</button>
+                <button type="button" class="mini-button" id="saveDirectTikTok" style="background: #25f4f1; color: #000; border: none; font-weight: 600; padding: 4px 8px;">Link Creator Channel</button>
+              </div>
+            </div>
+          </div>
+
           <div class="account-list" id="accountList"></div>
         </section>
 
@@ -271,6 +330,33 @@
             </button>
           </div>
           <div class="queue-table" id="queueTable"></div>
+        </section>
+
+        <!-- Custom Publish workspace section -->
+        <section class="panel" id="publish" style="display: none; flex-direction: column; gap: 16px; min-width: 0;">
+          <div class="panel-heading" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 4px; flex-wrap: wrap; gap: 12px;">
+            <div>
+              <p class="eyebrow">Campaign Builder</p>
+              <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;">Publish Workshop</h2>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="secondary-button" id="publishBackToDeskBtn" type="button" style="height: 32px; padding: 0 12px; font-size: 0.8rem;">
+                ← Back to Desk
+              </button>
+              <button class="primary-button" id="publishBulkBtn" type="button" style="height: 32px; padding: 0 12px; font-size: 0.8rem; background: #6366f1; border: none; color: white; font-weight: bold;">
+                🚀 Bulk Publish Campaign
+              </button>
+            </div>
+          </div>
+
+          <div style="background: rgba(30, 41, 59, 0.3); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 8px;">
+            <svg viewBox="0 0 24 24" style="width: 18px; height: 18px; fill: currentColor; color: #6366f1; flex-shrink: 0;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+            <span>Customize caption, title and channels individually for each selected video. If a clip was extracted locally, publishing will submit and trigger automatic Vizard integration processing & direct publishing!</span>
+          </div>
+
+          <div id="publishListContainer" style="display: flex; flex-direction: column; gap: 16px;">
+            <!-- Selected clips custom config cards will render here dynamically via JavaScript -->
+          </div>
         </section>
       </main>
     </div>

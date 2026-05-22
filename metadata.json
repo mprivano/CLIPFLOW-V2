@@ -1,6 +1,6 @@
 {
-  "name": "ClipFlow Studio",
-  "description": "A campaign workspace that turns long-form video sources into vertical short-form clips using AI and local FFmpeg cropping.",
+  "name": "",
+  "description": "",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
