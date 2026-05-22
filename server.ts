@@ -22,7 +22,6 @@ const vizardApiKey = process.env.VIZARDAI_API_KEY || "";
 const transcriptionModel = process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
 const analysisModel = process.env.OPENAI_ANALYSIS_MODEL || "gpt-5.4-mini";
 const maxTranscriptionBytes = 24 * 1024 * 1024;
-let googleDriveSession: any = null;
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -72,31 +71,6 @@ async function start() {
         return;
       }
 
-      if (url.pathname === "/api/firebase-auth-status" && request.method === "GET") {
-        const result = await handleFirebaseAuthStatus(request);
-        sendJson(response, result);
-        return;
-      }
-
-      if (url.pathname === "/api/google-drive-session") {
-        if (request.method === "GET") {
-          sendJson(response, getGoogleDriveSession());
-          return;
-        }
-
-        if (request.method === "POST") {
-          const result = await handleGoogleDriveSessionSave(request);
-          sendJson(response, result);
-          return;
-        }
-
-        if (request.method === "DELETE") {
-          googleDriveSession = null;
-          sendJson(response, { ok: true, connected: false });
-          return;
-        }
-      }
-
       if (url.pathname === "/api/clip" && request.method === "POST") {
         const result = await handleClipRequest(request, url);
         sendJson(response, result);
@@ -132,12 +106,6 @@ async function start() {
 
       if (url.pathname === "/api/delete-media" && request.method === "POST") {
         const result = await handleDeleteMediaRequest(request);
-        sendJson(response, result);
-        return;
-      }
-
-      if (url.pathname === "/api/open-google-drive-browser" && request.method === "POST") {
-        const result = await handleOpenGoogleDriveBrowser();
         sendJson(response, result);
         return;
       }
@@ -263,138 +231,6 @@ async function start() {
     console.log(`Using ffprobe: ${ffprobePath || "not found"}`);
     console.log(`AI understanding: ${openaiApiKey ? "enabled" : "waiting for OPENAI_API_KEY"}`);
     console.log(`Vizard AI: ${vizardApiKey ? "enabled" : "waiting for VIZARDAI_API_KEY"}`);
-  });
-}
-
-function getGoogleDriveSession() {
-  if (!googleDriveSession?.accessToken || Date.now() > googleDriveSession.expiresAt) {
-    googleDriveSession = null;
-    return { connected: false };
-  }
-
-  return {
-    connected: true,
-    accessToken: googleDriveSession.accessToken,
-    user: googleDriveSession.user,
-    connectedAt: googleDriveSession.connectedAt,
-    expiresAt: googleDriveSession.expiresAt,
-  };
-}
-
-async function handleGoogleDriveSessionSave(request: any) {
-  const body = await readJsonRequest(request);
-  const accessToken = String(body.accessToken || "").trim();
-
-  if (!accessToken) {
-    throw new Error("Missing Google Drive access token.");
-  }
-
-  googleDriveSession = {
-    accessToken,
-    user: sanitizeGoogleUser(body.user || {}),
-    connectedAt: Date.now(),
-    expiresAt: Date.now() + 55 * 60 * 1000,
-  };
-
-  return {
-    ok: true,
-    connected: true,
-    user: googleDriveSession.user,
-    connectedAt: googleDriveSession.connectedAt,
-    expiresAt: googleDriveSession.expiresAt,
-  };
-}
-
-function sanitizeGoogleUser(user: any) {
-  return {
-    displayName: String(user.displayName || "").slice(0, 160),
-    email: String(user.email || "").slice(0, 240),
-    photoURL: String(user.photoURL || "").slice(0, 500),
-    uid: String(user.uid || "").slice(0, 160),
-  };
-}
-
-async function handleFirebaseAuthStatus(request: any) {
-  const configPath = path.join(rootDir, "firebase-applet-config.json");
-  const firebaseConfig = JSON.parse(await fsp.readFile(configPath, "utf8"));
-  const rawHost = String(request.headers.host || `localhost:${port}`);
-  const currentDomain = rawHost.split(":")[0].toLowerCase();
-  const projectId = firebaseConfig.projectId || "";
-  const apiKey = firebaseConfig.apiKey || "";
-
-  if (!apiKey) {
-    return {
-      ok: false,
-      authorized: false,
-      currentDomain,
-      projectId,
-      error: "Missing Firebase API key.",
-    };
-  }
-
-  const firebaseResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/projects?key=${encodeURIComponent(apiKey)}`);
-  const firebaseStatus: any = await firebaseResponse.json().catch(() => ({}));
-
-  if (!firebaseResponse.ok) {
-    return {
-      ok: false,
-      authorized: false,
-      currentDomain,
-      projectId,
-      error: firebaseStatus.error?.message || "Could not check Firebase authorized domains.",
-    };
-  }
-
-  const authorizedDomains = Array.isArray(firebaseStatus.authorizedDomains)
-    ? firebaseStatus.authorizedDomains
-    : [];
-  const domainCandidates = new Set([currentDomain]);
-  if (currentDomain === "localhost") domainCandidates.add("127.0.0.1");
-  if (currentDomain === "127.0.0.1") domainCandidates.add("localhost");
-
-  return {
-    ok: true,
-    authorized: [...domainCandidates].some((domain) => authorizedDomains.includes(domain)),
-    currentDomain,
-    projectId,
-    authDomain: firebaseConfig.authDomain || "",
-    authorizedDomains,
-    settingsUrl: projectId
-      ? `https://console.firebase.google.com/project/${encodeURIComponent(projectId)}/authentication/settings`
-      : "",
-  };
-}
-
-async function handleOpenGoogleDriveBrowser() {
-  const targetUrl = `http://localhost:${port}/?externalAuth=1&startGoogle=1#google-drive`;
-  await openExternalUrl(targetUrl);
-  return { ok: true, url: targetUrl };
-}
-
-function openExternalUrl(targetUrl: string) {
-  if (process.platform === "darwin") {
-    return spawnDetached("open", ["-a", "Comet", targetUrl]).catch(() => spawnDetached("open", [targetUrl]));
-  }
-
-  const opener = process.platform === "win32"
-    ? { command: "cmd", args: ["/c", "start", "", targetUrl] }
-    : { command: "xdg-open", args: [targetUrl] };
-
-  return spawnDetached(opener.command, opener.args);
-}
-
-function spawnDetached(command: string, args: string[]) {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      detached: true,
-      stdio: "ignore",
-    });
-
-    child.once("error", reject);
-    child.once("spawn", () => {
-      child.unref();
-      resolve();
-    });
   });
 }
 
