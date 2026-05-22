@@ -7,6 +7,8 @@ let googleUser = null;
 let cachedAccessToken = null;
 let isSigningIn = false;
 let externalGDriveAutoStartUsed = false;
+let isFirebaseReady = false;
+let firebaseAuthStatus = null;
 let gdriveFiles = [];
 let gdriveFolders = [];
 let isGDriveLoading = false;
@@ -1827,13 +1829,35 @@ async function openGDriveInExternalBrowser() {
   return data;
 }
 
-async function beginGoogleDriveRedirect() {
-  await ensureFirebaseInitialized();
-  await signInWithRedirect(auth, provider);
+async function loadFirebaseAuthStatus() {
+  try {
+    const response = await fetch(apiUrl("/api/firebase-auth-status"));
+    const data = await response.json().catch(() => ({}));
+    firebaseAuthStatus = response.ok ? data : { authorized: true };
+  } catch (err) {
+    console.warn("Could not check Firebase auth status:", err);
+    firebaseAuthStatus = { authorized: true };
+  }
+
+  return firebaseAuthStatus;
+}
+
+function getFirebaseAuthSetupMessage(status) {
+  if (!status || status.authorized !== false) return "";
+  const domain = status.currentDomain || window.location.hostname || "localhost";
+  return `Google sign-in is blocked because ${domain} is not allowed in Firebase Authentication yet. Add localhost to Authorized domains, then refresh ClipFlow.`;
+}
+
+function beginGoogleDriveRedirect() {
+  if (!auth || !provider) {
+    throw new Error("Google sign-in is still loading. Try again in a moment.");
+  }
+
+  return signInWithRedirect(auth, provider);
 }
 
 async function maybeStartExternalGDriveLogin() {
-  if (externalGDriveAutoStartUsed || googleUser || cachedAccessToken || !shouldAutoStartExternalGDriveAuth()) {
+  if (externalGDriveAutoStartUsed || !isFirebaseReady || googleUser || cachedAccessToken || !shouldAutoStartExternalGDriveAuth()) {
     return;
   }
 
@@ -1983,6 +2007,16 @@ async function ensureFirebaseInitialized() {
     try {
       const configRes = await fetch("./firebase-applet-config.json");
       const firebaseConfig = await configRes.json();
+      const authStatus = await loadFirebaseAuthStatus();
+      const authSetupMessage = getFirebaseAuthSetupMessage(authStatus);
+
+      if (authSetupMessage) {
+        gdriveError = authSetupMessage;
+        isFirebaseReady = false;
+        renderGDrive();
+        return;
+      }
+
       app = initializeApp(firebaseConfig);
       auth = getAuth(app);
       provider = new GoogleAuthProvider();
@@ -1993,6 +2027,8 @@ async function ensureFirebaseInitialized() {
       provider.setCustomParameters({
         prompt: "select_account"
       });
+      isFirebaseReady = true;
+      renderGDrive();
 
       const redirectResult = await getRedirectResult(auth);
       if (redirectResult) {
@@ -2018,6 +2054,7 @@ async function ensureFirebaseInitialized() {
       });
     } catch (err) {
       console.error("Failed to initialize Firebase:", err);
+      isFirebaseReady = false;
       firebaseInitializedPromise = null; // Reset to allow retry
       throw err;
     }
@@ -2521,13 +2558,12 @@ async function renderGDrive() {
 
   // If no auth, show standard Sign-In screen
   if (!googleUser || !cachedAccessToken) {
-    const browserAuthMode = isExternalGDriveAuthMode();
-    const helperCopy = browserAuthMode
-      ? "Connect Google Drive to access all Mp4 videos synced from Vizard directly inside ClipFlow."
-      : "ClipFlow will open your normal browser for Google sign-in, then you can keep working from that browser tab.";
+    const helperCopy = "Connect Google Drive to access all Mp4 videos synced from Vizard directly inside ClipFlow.";
     const loginButtonText = isSigningIn
-      ? (browserAuthMode ? "Opening Google..." : "Opening browser...")
-      : (browserAuthMode ? "Sign in with Google" : "Open Google sign-in");
+      ? "Opening Google..."
+      : (gdriveError && !isFirebaseReady ? "Google setup needed" : (isFirebaseReady ? "Sign in with Google" : "Preparing Google..."));
+    const disableLoginButton = isSigningIn || !isFirebaseReady;
+    const settingsUrl = firebaseAuthStatus?.settingsUrl || "";
 
     elements.gdriveContainer.innerHTML = `
       <div class="empty-state" style="padding: 40px 16px; text-align: center;">
@@ -2536,7 +2572,17 @@ async function renderGDrive() {
         <p style="margin-bottom: 24px; color: var(--muted); max-width: 440px; margin-left: auto; margin-right: auto;">
           ${escapeHtml(helperCopy)}
         </p>
-        <button class="gsi-material-button" id="gdriveLoginBtn" type="button" ${isSigningIn ? "disabled" : ""} style="align-self: center; background-color: white; border: 1px solid #747775; border-radius: 4px; box-sizing: border-box; color: #1f1f1f; cursor: pointer; font-family: 'Open Sans', arial, sans-serif; font-size: 14px; font-weight: 500; height: 40px; justify-content: center; letter-spacing: 0.25px; outline: none; overflow: hidden; padding: 0 12px; position: relative; text-align: center; transition: background-color .218s, border-color .218s, box-shadow .218s; user-select: none; width: auto; display: inline-flex; align-items: center; gap: 8px; ${isSigningIn ? "opacity: 0.7; cursor: wait;" : ""}">
+        ${gdriveError ? `
+          <div style="max-width: 520px; margin: 0 auto 18px; padding: 12px 14px; border: 1px solid #fecaca; background: #fff1f2; color: #9f1239; border-radius: 6px; font-size: 0.86rem; line-height: 1.45;">
+            ${escapeHtml(gdriveError)}
+            ${settingsUrl ? `
+              <div style="margin-top: 10px;">
+                <a href="${escapeHtml(settingsUrl)}" target="_blank" rel="noreferrer" style="color: #be123c; font-weight: 700;">Open Firebase settings</a>
+              </div>
+            ` : ""}
+          </div>
+        ` : ""}
+        <button class="gsi-material-button" id="gdriveLoginBtn" type="button" ${disableLoginButton ? "disabled" : ""} style="align-self: center; background-color: white; border: 1px solid #747775; border-radius: 4px; box-sizing: border-box; color: #1f1f1f; cursor: pointer; font-family: 'Open Sans', arial, sans-serif; font-size: 14px; font-weight: 500; height: 40px; justify-content: center; letter-spacing: 0.25px; outline: none; overflow: hidden; padding: 0 12px; position: relative; text-align: center; transition: background-color .218s, border-color .218s, box-shadow .218s; user-select: none; width: auto; display: inline-flex; align-items: center; gap: 8px; ${disableLoginButton ? "opacity: 0.7; cursor: wait;" : ""}">
           <div class="gsi-material-button-icon" style="height: 20px; min-width: 20px; width: 20px; display: flex; align-items: center; justify-content: center;">
             <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" style="display: block; width: 20px; height: 20px;">
               <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
@@ -2818,20 +2864,25 @@ async function renderGDrive() {
 async function handleGDriveLogin() {
   if (isSigningIn) return;
   try {
+    if (!isFirebaseReady) {
+      gdriveError = "Google sign-in is still loading. Try again in a moment.";
+      renderGDrive();
+      return;
+    }
+
     isSigningIn = true;
     gdriveError = null;
     renderGDrive();
 
-    if (!isExternalGDriveAuthMode()) {
-      await openGDriveInExternalBrowser();
-      return;
-    }
-
-    await beginGoogleDriveRedirect();
+    beginGoogleDriveRedirect().catch((err) => {
+      console.error("Google sign-in error:", err);
+      gdriveError = err.message || "Sign in failed.";
+      isSigningIn = false;
+      renderGDrive();
+    });
   } catch (err) {
     console.error("Google sign-in error:", err);
     gdriveError = err.message || "Sign in failed.";
-  } finally {
     isSigningIn = false;
     renderGDrive();
   }

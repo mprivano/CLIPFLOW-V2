@@ -71,6 +71,12 @@ async function start() {
         return;
       }
 
+      if (url.pathname === "/api/firebase-auth-status" && request.method === "GET") {
+        const result = await handleFirebaseAuthStatus(request);
+        sendJson(response, result);
+        return;
+      }
+
       if (url.pathname === "/api/clip" && request.method === "POST") {
         const result = await handleClipRequest(request, url);
         sendJson(response, result);
@@ -238,6 +244,57 @@ async function start() {
     console.log(`AI understanding: ${openaiApiKey ? "enabled" : "waiting for OPENAI_API_KEY"}`);
     console.log(`Vizard AI: ${vizardApiKey ? "enabled" : "waiting for VIZARDAI_API_KEY"}`);
   });
+}
+
+async function handleFirebaseAuthStatus(request: any) {
+  const configPath = path.join(rootDir, "firebase-applet-config.json");
+  const firebaseConfig = JSON.parse(await fsp.readFile(configPath, "utf8"));
+  const rawHost = String(request.headers.host || `localhost:${port}`);
+  const currentDomain = rawHost.split(":")[0].toLowerCase();
+  const projectId = firebaseConfig.projectId || "";
+  const apiKey = firebaseConfig.apiKey || "";
+
+  if (!apiKey) {
+    return {
+      ok: false,
+      authorized: false,
+      currentDomain,
+      projectId,
+      error: "Missing Firebase API key.",
+    };
+  }
+
+  const firebaseResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/projects?key=${encodeURIComponent(apiKey)}`);
+  const firebaseStatus: any = await firebaseResponse.json().catch(() => ({}));
+
+  if (!firebaseResponse.ok) {
+    return {
+      ok: false,
+      authorized: false,
+      currentDomain,
+      projectId,
+      error: firebaseStatus.error?.message || "Could not check Firebase authorized domains.",
+    };
+  }
+
+  const authorizedDomains = Array.isArray(firebaseStatus.authorizedDomains)
+    ? firebaseStatus.authorizedDomains
+    : [];
+  const domainCandidates = new Set([currentDomain]);
+  if (currentDomain === "localhost") domainCandidates.add("127.0.0.1");
+  if (currentDomain === "127.0.0.1") domainCandidates.add("localhost");
+
+  return {
+    ok: true,
+    authorized: [...domainCandidates].some((domain) => authorizedDomains.includes(domain)),
+    currentDomain,
+    projectId,
+    authDomain: firebaseConfig.authDomain || "",
+    authorizedDomains,
+    settingsUrl: projectId
+      ? `https://console.firebase.google.com/project/${encodeURIComponent(projectId)}/authentication/settings`
+      : "",
+  };
 }
 
 async function handleOpenGoogleDriveBrowser() {
