@@ -110,6 +110,12 @@ async function start() {
         return;
       }
 
+      if (url.pathname === "/api/open-google-drive-browser" && request.method === "POST") {
+        const result = await handleOpenGoogleDriveBrowser();
+        sendJson(response, result);
+        return;
+      }
+
       if (url.pathname === "/api/proxy-video" && request.method === "GET") {
         const videoUrlStr = url.searchParams.get("url");
         if (!videoUrlStr) {
@@ -231,6 +237,34 @@ async function start() {
     console.log(`Using ffprobe: ${ffprobePath || "not found"}`);
     console.log(`AI understanding: ${openaiApiKey ? "enabled" : "waiting for OPENAI_API_KEY"}`);
     console.log(`Vizard AI: ${vizardApiKey ? "enabled" : "waiting for VIZARDAI_API_KEY"}`);
+  });
+}
+
+async function handleOpenGoogleDriveBrowser() {
+  const targetUrl = `http://localhost:${port}/?externalAuth=1&startGoogle=1#google-drive`;
+  await openExternalUrl(targetUrl);
+  return { ok: true, url: targetUrl };
+}
+
+function openExternalUrl(targetUrl: string) {
+  const opener =
+    process.platform === "darwin"
+      ? { command: "open", args: [targetUrl] }
+      : process.platform === "win32"
+        ? { command: "cmd", args: ["/c", "start", "", targetUrl] }
+        : { command: "xdg-open", args: [targetUrl] };
+
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(opener.command, opener.args, {
+      detached: true,
+      stdio: "ignore",
+    });
+
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
   });
 }
 

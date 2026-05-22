@@ -6,6 +6,7 @@ const storageKey = "clipflow-studio-state-v1";
 let googleUser = null;
 let cachedAccessToken = null;
 let isSigningIn = false;
+let externalGDriveAutoStartUsed = false;
 let gdriveFiles = [];
 let gdriveFolders = [];
 let isGDriveLoading = false;
@@ -1798,6 +1799,60 @@ function apiUrl(pathname) {
   return pathname;
 }
 
+function isExternalGDriveAuthMode() {
+  return new URLSearchParams(window.location.search).has("externalAuth");
+}
+
+function shouldAutoStartExternalGDriveAuth() {
+  return isExternalGDriveAuthMode() && new URLSearchParams(window.location.search).has("startGoogle");
+}
+
+function clearExternalGDriveAutoStartFlag() {
+  const params = new URLSearchParams(window.location.search);
+  params.delete("startGoogle");
+  const query = params.toString();
+  const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+  window.history.replaceState(null, "", nextUrl);
+}
+
+async function openGDriveInExternalBrowser() {
+  const response = await fetch(apiUrl("/api/open-google-drive-browser"), { method: "POST" });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Could not open your browser.");
+  }
+
+  setClipStatus("Opened Google Drive sign-in in your browser.", "ready");
+  return data;
+}
+
+async function beginGoogleDriveRedirect() {
+  await ensureFirebaseInitialized();
+  await signInWithRedirect(auth, provider);
+}
+
+async function maybeStartExternalGDriveLogin() {
+  if (externalGDriveAutoStartUsed || googleUser || cachedAccessToken || !shouldAutoStartExternalGDriveAuth()) {
+    return;
+  }
+
+  externalGDriveAutoStartUsed = true;
+  isSigningIn = true;
+  gdriveError = null;
+  clearExternalGDriveAutoStartFlag();
+  renderGDrive();
+
+  try {
+    await beginGoogleDriveRedirect();
+  } catch (err) {
+    console.error("Google sign-in error:", err);
+    gdriveError = err.message || "Sign in failed.";
+    isSigningIn = false;
+    renderGDrive();
+  }
+}
+
 function assetUrl(pathname) {
   if (!pathname) return "";
   if (pathname.startsWith("http") && (pathname.includes("amazonaws.com") || pathname.includes("vizard.ai") || pathname.includes("s3"))) {
@@ -1972,9 +2027,11 @@ async function ensureFirebaseInitialized() {
 }
 
 // Start background initialization instantly
-ensureFirebaseInitialized().catch(err => {
-  console.error("Background Firebase initialization failed:", err);
-});
+ensureFirebaseInitialized()
+  .then(() => maybeStartExternalGDriveLogin())
+  .catch(err => {
+    console.error("Background Firebase initialization failed:", err);
+  });
 
 async function createGDriveSubFolder(folderName, parentFolderId) {
   if (!cachedAccessToken) {
@@ -2464,14 +2521,22 @@ async function renderGDrive() {
 
   // If no auth, show standard Sign-In screen
   if (!googleUser || !cachedAccessToken) {
+    const browserAuthMode = isExternalGDriveAuthMode();
+    const helperCopy = browserAuthMode
+      ? "Connect Google Drive to access all Mp4 videos synced from Vizard directly inside ClipFlow."
+      : "ClipFlow will open your normal browser for Google sign-in, then you can keep working from that browser tab.";
+    const loginButtonText = isSigningIn
+      ? (browserAuthMode ? "Opening Google..." : "Opening browser...")
+      : (browserAuthMode ? "Sign in with Google" : "Open Google sign-in");
+
     elements.gdriveContainer.innerHTML = `
       <div class="empty-state" style="padding: 40px 16px; text-align: center;">
         <div aria-hidden="true" style="margin-bottom: 16px; font-size: 3rem;">📂</div>
         <h3>Access Synced Videos</h3>
         <p style="margin-bottom: 24px; color: var(--muted); max-width: 440px; margin-left: auto; margin-right: auto;">
-          Connect Google Drive to access all Mp4 videos synced from Vizard directly inside ClipFlow, without having to leave the app!
+          ${escapeHtml(helperCopy)}
         </p>
-        <button class="gsi-material-button" id="gdriveLoginBtn" type="button" style="align-self: center; background-color: white; border: 1px solid #747775; border-radius: 4px; box-sizing: border-box; color: #1f1f1f; cursor: pointer; font-family: 'Open Sans', arial, sans-serif; font-size: 14px; font-weight: 500; height: 40px; justify-content: center; letter-spacing: 0.25px; outline: none; overflow: hidden; padding: 0 12px; position: relative; text-align: center; transition: background-color .218s, border-color .218s, box-shadow .218s; user-select: none; width: auto; display: inline-flex; align-items: center; gap: 8px;">
+        <button class="gsi-material-button" id="gdriveLoginBtn" type="button" ${isSigningIn ? "disabled" : ""} style="align-self: center; background-color: white; border: 1px solid #747775; border-radius: 4px; box-sizing: border-box; color: #1f1f1f; cursor: pointer; font-family: 'Open Sans', arial, sans-serif; font-size: 14px; font-weight: 500; height: 40px; justify-content: center; letter-spacing: 0.25px; outline: none; overflow: hidden; padding: 0 12px; position: relative; text-align: center; transition: background-color .218s, border-color .218s, box-shadow .218s; user-select: none; width: auto; display: inline-flex; align-items: center; gap: 8px; ${isSigningIn ? "opacity: 0.7; cursor: wait;" : ""}">
           <div class="gsi-material-button-icon" style="height: 20px; min-width: 20px; width: 20px; display: flex; align-items: center; justify-content: center;">
             <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" style="display: block; width: 20px; height: 20px;">
               <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
@@ -2480,7 +2545,7 @@ async function renderGDrive() {
               <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
             </svg>
           </div>
-          <span class="gsi-material-button-contents">Sign in with Google</span>
+          <span class="gsi-material-button-contents">${escapeHtml(loginButtonText)}</span>
         </button>
       </div>
     `;
@@ -2754,14 +2819,21 @@ async function handleGDriveLogin() {
   if (isSigningIn) return;
   try {
     isSigningIn = true;
-    await ensureFirebaseInitialized();
-    await signInWithRedirect(auth, provider);
+    gdriveError = null;
+    renderGDrive();
+
+    if (!isExternalGDriveAuthMode()) {
+      await openGDriveInExternalBrowser();
+      return;
+    }
+
+    await beginGoogleDriveRedirect();
   } catch (err) {
     console.error("Google sign-in error:", err);
     gdriveError = err.message || "Sign in failed.";
-    renderGDrive();
   } finally {
     isSigningIn = false;
+    renderGDrive();
   }
 }
 
