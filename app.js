@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+import { getAuth, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 
 const storageKey = "clipflow-studio-state-v1";
 
@@ -1939,6 +1939,17 @@ async function ensureFirebaseInitialized() {
         prompt: "select_account"
       });
 
+      const redirectResult = await getRedirectResult(auth);
+      if (redirectResult) {
+        const credential = GoogleAuthProvider.credentialFromResult(redirectResult);
+        if (credential?.accessToken) {
+          cachedAccessToken = credential.accessToken;
+          googleUser = redirectResult.user;
+          gdriveError = null;
+          await triggerGDriveLoad();
+        }
+      }
+
       onAuthStateChanged(auth, async (user) => {
         if (user) {
           googleUser = user;
@@ -2744,23 +2755,9 @@ async function handleGDriveLogin() {
   try {
     isSigningIn = true;
     await ensureFirebaseInitialized();
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    
-    if (credential && credential.accessToken) {
-      cachedAccessToken = credential.accessToken;
-      googleUser = result.user;
-      gdriveError = null;
-      await triggerGDriveLoad();
-      // Auto-upload existing non-backed-up clips in the active list
-      if (state.clips && state.clips.length) {
-        triggerAutoBackupToGoogleDrive(state.clips);
-      }
-    } else {
-      throw new Error("Failed to receive Google access token from popup.");
-    }
+    await signInWithRedirect(auth, provider);
   } catch (err) {
-    console.error("Popup Error:", err);
+    console.error("Google sign-in error:", err);
     gdriveError = err.message || "Sign in failed.";
     renderGDrive();
   } finally {
@@ -2917,4 +2914,3 @@ function startVizardBackgroundPolling() {
 
 // Start polling immediately if there are any processing projects loaded from cache
 startVizardBackgroundPolling();
-
