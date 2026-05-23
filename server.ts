@@ -166,6 +166,12 @@ async function start() {
         return;
       }
 
+      if (url.pathname === "/api/optimization-scan" && request.method === "POST") {
+        const result = await handleOptimizationScanRequest(request);
+        sendJson(response, result);
+        return;
+      }
+
       const clientVizardKey = request.headers["x-vizard-api-key"] || request.headers["X-Vizard-Api-Key"];
       const activeVizardApiKey = (typeof clientVizardKey === "string" && clientVizardKey.trim()) ? clientVizardKey.trim() : vizardApiKey;
 
@@ -1202,6 +1208,179 @@ async function handleClipRequest(request: any, url: any) {
     understanding: analysisResult.understanding,
     clips,
   };
+}
+
+async function handleOptimizationScanRequest(request: any) {
+  if (!geminiApiKey) {
+    return {
+      ok: false,
+      error: "Gemini optimization scan is not configured. Add GEMINI_API_KEY to your local .env file and restart ClipFlow.",
+    };
+  }
+
+  const body = await readJsonRequest(request);
+  const summary = sanitizeOptimizationSummary(body?.summary || {});
+
+  const prompt = [
+    "Return JSON only.",
+    "Use the exact response shape: {\"items\":[{\"id\":\"short-stable-id\",\"category\":\"ai\",\"priority\":\"high\",\"effort\":\"small\",\"title\":\"Short actionable title\",\"problem\":\"What is wrong or missing\",\"why\":\"Why this matters\",\"files\":[\"app.js\",\"styles.css\"],\"implementation\":\"Specific implementation guidance\",\"verification\":\"How to verify manually\"}]}",
+    "Allowed priority values: high, medium, low.",
+    "Allowed effort values: small, medium, large.",
+    "Suggest practical ClipFlow improvements based only on this safe app summary.",
+    "Do not ask for secrets. Do not mention private keys, tokens, service account JSON, or credential values.",
+    "Prefer changes in index.html, app.js, styles.css, server.ts, README.md, or .env.example when relevant.",
+    "Limit to 8 high-signal items.",
+    "",
+    "Safe app summary:",
+    JSON.stringify(summary, null, 2),
+  ].join("\n");
+
+  try {
+    const rawGeminiText = await requestGeminiOptimizationItems(prompt);
+    const parsed = parseGeminiOptimizationResponse(rawGeminiText);
+    const items = normalizeGeminiOptimizationItems(parsed.items);
+    return { ok: true, items };
+  } catch (error: any) {
+    return {
+      ok: false,
+      error: error.message || "Gemini optimization scan failed.",
+    };
+  }
+}
+
+async function requestGeminiOptimizationItems(prompt: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompt }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.25,
+          maxOutputTokens: 4096,
+          responseMimeType: "application/json",
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
+        },
+      }),
+    });
+    const data: any = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const apiMessage = data?.error?.message || `Gemini request failed with HTTP ${response.status}.`;
+      throw new Error(apiMessage);
+    }
+
+    const text = data?.candidates?.[0]?.content?.parts
+      ?.map((part: any) => part?.text || "")
+      .join("")
+      .trim();
+
+    if (!text) {
+      throw new Error("Gemini returned an empty optimization response.");
+    }
+
+    return text;
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      throw new Error("Gemini optimization scan timed out. Check your network connection and try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function sanitizeOptimizationSummary(summary: any) {
+  const statuses = summary?.optimizationItemStatuses && typeof summary.optimizationItemStatuses === "object"
+    ? Object.fromEntries(
+        Object.entries(summary.optimizationItemStatuses)
+          .slice(0, 60)
+          .map(([id, status]) => [String(id).slice(0, 100), String(status).slice(0, 30)]),
+      )
+    : {};
+
+  return {
+    clipCount: clamp(Number(summary.clipCount) || 0, 0, 10000),
+    approvedClipCount: clamp(Number(summary.approvedClipCount) || 0, 0, 10000),
+    queueCount: clamp(Number(summary.queueCount) || 0, 0, 10000),
+    failedQueueCount: clamp(Number(summary.failedQueueCount) || 0, 0, 10000),
+    connectedAccountCount: clamp(Number(summary.connectedAccountCount) || 0, 0, 1000),
+    blockedAccountCount: clamp(Number(summary.blockedAccountCount) || 0, 0, 1000),
+    vizardProjectCount: clamp(Number(summary.vizardProjectCount) || 0, 0, 10000),
+    processingVizardProjectCount: clamp(Number(summary.processingVizardProjectCount) || 0, 0, 10000),
+    googleDriveConfigured: Boolean(summary.googleDriveConfigured),
+    googleDriveHasError: Boolean(summary.googleDriveHasError),
+    clippingProvider: String(summary.clippingProvider || "").replace(/[^a-z0-9-_ ]/gi, "").slice(0, 40),
+    optimizationItemStatuses: statuses,
+  };
+}
+
+function parseGeminiOptimizationResponse(raw: string) {
+  const clean = raw
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  const parsed = JSON.parse(clean || "{}");
+  if (!parsed || !Array.isArray(parsed.items)) {
+    throw new Error("Gemini returned an invalid optimization response.");
+  }
+  return parsed;
+}
+
+function normalizeGeminiOptimizationItems(items: any[]) {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => item && typeof item === "object")
+    .slice(0, 8)
+    .map((item, index) => {
+      const title = String(item.title || `Gemini improvement ${index + 1}`).trim().slice(0, 140);
+      const providedId = String(item.id || title || `gemini-${index + 1}`).toLowerCase();
+      const slug = providedId
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 70);
+      const stableHash = crypto
+        .createHash("sha1")
+        .update(`${title}:${item.problem || ""}`)
+        .digest("hex")
+        .slice(0, 8);
+      return {
+        id: slug ? `gemini-${slug}` : `gemini-${stableHash}`,
+        category: "ai",
+        source: "gemini",
+        priority: normalizeOptimizationPriority(item.priority),
+        effort: normalizeOptimizationEffort(item.effort),
+        title,
+        problem: String(item.problem || "").trim().slice(0, 500),
+        why: String(item.why || "").trim().slice(0, 500),
+        files: Array.isArray(item.files) ? item.files.map((file) => String(file).trim()).filter(Boolean).slice(0, 6) : [],
+        implementation: String(item.implementation || "").trim().slice(0, 900),
+        verification: String(item.verification || "").trim().slice(0, 600),
+      };
+    });
+}
+
+function normalizeOptimizationPriority(value: any) {
+  const clean = String(value || "").toLowerCase();
+  return ["high", "medium", "low"].includes(clean) ? clean : "medium";
+}
+
+function normalizeOptimizationEffort(value: any) {
+  const clean = String(value || "").toLowerCase();
+  return ["small", "medium", "large"].includes(clean) ? clean : "medium";
 }
 
 async function handleDeleteMediaRequest(request: any) {

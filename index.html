@@ -450,7 +450,7 @@
             <div style="display: flex; gap: 8px; align-items: center;">
               <button class="primary-button animate-subtle" id="runAuditBtn" type="button" style="height: 32px; padding: 0 12px; font-size: 0.8rem; background: #6366f1; border: none; color: white; font-weight: bold; display: flex; align-items: center; gap: 6px;">
                 <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor; margin-right: 2px;"><path d="m12 2 1.5 5.1L19 8.6l-5.5 1.5L12 15l-1.5-4.9L5 8.6l5.5-1.5L12 2Zm6 12 1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3ZM5 14l.8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14Z"></path></svg>
-                Scan Workspace
+                Refresh feed
               </button>
             </div>
           </div>
@@ -459,21 +459,25 @@
           <div style="display: flex; border-bottom: 1px solid var(--line); gap: 8px; padding-bottom: 1px; margin-bottom: 4px; flex-wrap: wrap;">
             <button type="button" class="opt-tab-btn" id="optTabContent" style="background: none; border: none; padding: 8px 16px; font-size: 0.9rem; font-weight: 600; color: #818cf8; border-bottom: 2px solid #6366f1; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;">
               <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-              <span>Content Creation</span>
+              <span>Content</span>
             </button>
             <button type="button" class="opt-tab-btn" id="optTabClipflow" style="background: none; border: none; padding: 8px 16px; font-size: 0.9rem; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;">
               <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
-              <span>ClipFlow Configurations</span>
+              <span>ClipFlow</span>
             </button>
             <button type="button" class="opt-tab-btn" id="optTabFeatures" style="background: none; border: none; padding: 8px 16px; font-size: 0.9rem; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;">
               <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-              <span>App Features</span>
+              <span>Features</span>
+            </button>
+            <button type="button" class="opt-tab-btn" id="optTabAi" style="background: none; border: none; padding: 8px 16px; font-size: 0.9rem; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;">
+              <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;"><path d="M12 2l1.5 5.1L19 8.6l-5.5 1.5L12 15l-1.5-4.9L5 8.6l5.5-1.5L12 2z"/><path d="M18 14l1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3z"/></svg>
+              <span>AI</span>
             </button>
           </div>
 
           <div id="optimizationIntroText" style="background: rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px; padding: 12px 16px; font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 10px;">
             <svg viewBox="0 0 24 24" style="width: 20px; height: 20px; fill: currentColor; color: #818cf8; flex-shrink: 0;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
-            <span id="optimizationIntroSpan">Review and **Approve** modular enhancers proposed by our Smart Assistant to optimize your creation workflow and application capabilities. Approved features activate instantly.</span>
+            <span id="optimizationIntroSpan">Review constant improvements based on the current ClipFlow workspace state.</span>
           </div>
 
           <div id="optimizationListContainer" style="display: flex; flex-direction: column; gap: 16px;">

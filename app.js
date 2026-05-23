@@ -157,6 +157,7 @@ const elements = {
   optTabContent: document.querySelector("#optTabContent"),
   optTabClipflow: document.querySelector("#optTabClipflow"),
   optTabFeatures: document.querySelector("#optTabFeatures"),
+  optTabAi: document.querySelector("#optTabAi"),
   sidebarLinkAnalytics: document.querySelector("#sidebarLinkAnalytics"),
   sidebarLinkSettings: document.querySelector("#sidebarLinkSettings"),
   analyticsTotalClips: document.querySelector("#analyticsTotalClips"),
@@ -917,6 +918,10 @@ function createInitialState() {
     activeVizardAccountId: "system",
     selectedClipIds: [],
     optimizations: [],
+    optimizationStatuses: {},
+    aiOptimizationItems: [],
+    aiOptimizationLoading: false,
+    aiOptimizationError: "",
     hasRunOptimizationAudit: false,
     optimizationActiveTab: "content",
   };
@@ -936,6 +941,10 @@ function loadState() {
         clips,
         vizardProjects: normalizeVizardProjects(saved.vizardProjects || [], clips, saved.source || {}),
         queue: normalizeQueue(saved.queue || []), // Explicitly normalize and load queue
+        optimizationStatuses: normalizeOptimizationStatuses(saved.optimizationStatuses, saved.optimizations),
+        aiOptimizationItems: normalizeAiOptimizationItems(saved.aiOptimizationItems || []),
+        aiOptimizationLoading: false,
+        aiOptimizationError: "",
       });
     }
   } catch (error) {
@@ -946,6 +955,75 @@ function loadState() {
 
 function normalizeQueue(queue) {
   return Array.isArray(queue) ? queue : [];
+}
+
+function normalizeOptimizationStatuses(statuses, legacyOptimizations = []) {
+  const normalized = {};
+  const allowedStatuses = new Set(["new", "planned", "in-progress", "done", "dismissed"]);
+
+  if (statuses && typeof statuses === "object") {
+    Object.entries(statuses).forEach(([id, status]) => {
+      if (allowedStatuses.has(status)) {
+        normalized[id] = status;
+      }
+    });
+  }
+
+  if (Array.isArray(legacyOptimizations)) {
+    legacyOptimizations.forEach((item) => {
+      if (!item?.id || normalized[item.id]) return;
+      if (item.status === "pending") {
+        normalized[item.id] = "new";
+      } else if (item.status === "approved") {
+        normalized[item.id] = "done";
+      } else if (allowedStatuses.has(item.status)) {
+        normalized[item.id] = item.status;
+      }
+    });
+  }
+
+  return normalized;
+}
+
+function normalizeOptimizationPriority(value) {
+  const clean = String(value || "").toLowerCase();
+  return ["high", "medium", "low"].includes(clean) ? clean : "medium";
+}
+
+function normalizeOptimizationEffort(value) {
+  const clean = String(value || "").toLowerCase();
+  return ["small", "medium", "large"].includes(clean) ? clean : "medium";
+}
+
+function normalizeAiOptimizationItems(items) {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .filter((item) => item && typeof item === "object")
+    .slice(0, 8)
+    .map((item, index) => {
+      const title = String(item.title || `Gemini improvement ${index + 1}`).trim().slice(0, 140);
+      const idSeed = String(item.id || title || `gemini-${index + 1}`).toLowerCase();
+      const id = idSeed
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 80) || `gemini-${index + 1}`;
+
+      return createOptimizationFeedItem({
+        id: id.startsWith("gemini-") ? id : `gemini-${id}`,
+        category: "ai",
+        priority: normalizeOptimizationPriority(item.priority),
+        effort: normalizeOptimizationEffort(item.effort),
+        title,
+        problem: String(item.problem || "").trim().slice(0, 500),
+        why: String(item.why || "").trim().slice(0, 500),
+        files: Array.isArray(item.files) ? item.files.map((file) => String(file).trim()).filter(Boolean).slice(0, 6) : [],
+        implementation: String(item.implementation || "").trim().slice(0, 900),
+        verification: String(item.verification || "").trim().slice(0, 600),
+        status: item.status || "new",
+        source: "gemini",
+      });
+    });
 }
 
 function saveAndRender() {
@@ -4029,7 +4107,438 @@ if (elements.publishListContainer) {
 
 /* === SMART OPTIMIZATION TAB FEATURE === */
 
+const optimizationStatusLabels = {
+  new: "New",
+  planned: "Planned",
+  "in-progress": "In progress",
+  done: "Done",
+  dismissed: "Dismissed",
+};
+
+function createOptimizationFeedItem({
+  id,
+  category,
+  priority,
+  effort,
+  title,
+  problem,
+  why,
+  files,
+  implementation,
+  verification,
+  action = "",
+  status = "new",
+  source = "built-in",
+}) {
+  return {
+    id,
+    category,
+    priority,
+    effort,
+    status,
+    title,
+    problem,
+    why,
+    files,
+    implementation,
+    verification,
+    action,
+    source,
+    type: `${priority} priority / ${effort} effort`,
+    description: problem,
+    before: Array.isArray(files) ? files.join(", ") : String(files || ""),
+    after: implementation,
+  };
+}
+
+function mergeOptimizationStatuses(items) {
+  state.optimizationStatuses = normalizeOptimizationStatuses(state.optimizationStatuses, state.optimizations);
+
+  return items.map((item) => ({
+    ...item,
+    status: state.optimizationStatuses[item.id] || item.status || "new",
+  }));
+}
+
+function setOptimizationStatus(itemId, status) {
+  const allowedStatuses = new Set(["new", "planned", "in-progress", "done", "dismissed"]);
+  if (!itemId || !allowedStatuses.has(status)) return;
+
+  state.optimizationStatuses = normalizeOptimizationStatuses(state.optimizationStatuses, state.optimizations);
+  state.optimizationStatuses[itemId] = status;
+  state.optimizations = (state.optimizations || []).map((item) => (
+    item.id === itemId ? { ...item, status } : item
+  ));
+  state.aiOptimizationItems = (state.aiOptimizationItems || []).map((item) => (
+    item.id === itemId ? { ...item, status } : item
+  ));
+  localStorage.setItem(storageKey, JSON.stringify(state));
+}
+
+async function copyOptimizationPrompt(item) {
+  if (!item) return;
+
+  const files = Array.isArray(item.files) ? item.files.join("\n") : String(item.files || "");
+  const prompt = `Task:
+${item.title || ""}
+
+Problem:
+${item.problem || ""}
+
+Why this matters:
+${item.why || ""}
+
+Files to change:
+${files}
+
+Implementation notes:
+${item.implementation || ""}
+
+Verification:
+${item.verification || ""}`;
+
+  try {
+    await navigator.clipboard.writeText(prompt);
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = prompt;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+  }
+
+  setClipStatus("Implementation prompt copied to clipboard.", "ready");
+}
+
+function hasLocalCredentialVaultData() {
+  try {
+    const vault = JSON.parse(localStorage.getItem(credentialVaultKey));
+    return Boolean(
+      vault &&
+      (
+        (Array.isArray(vault.accounts) && vault.accounts.length > 0) ||
+        (Array.isArray(vault.vizardApiAccounts) && vault.vizardApiAccounts.length > 0)
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function buildOptimizationFeed() {
+  const items = [];
+  const approvedClips = (state.clips || []).filter((clip) => clip.approved);
+  const enabledAccounts = (state.accounts || []).filter((account) => account.enabled);
+  const blockedEnabledAccounts = enabledAccounts.filter((account) => !isPublishReadyAccount(account));
+  const failedQueueJobs = (state.queue || []).filter((job) => job.status === "Failed");
+  const processingProjects = (state.vizardProjects || []).filter((project) => {
+    return project.projectId && (project.status === "processing" || !project.clips?.length);
+  });
+  const driveHasIssue = Boolean(
+    gdriveError ||
+    (gdriveServiceStatusChecked && (!gdriveServiceStatus || !isServiceDriveMode()))
+  );
+
+  if (!(state.clips || []).length) {
+    items.push(createOptimizationFeedItem({
+      id: "dynamic-fresh-start-studio-guidance",
+      category: "content",
+      priority: "high",
+      effort: "medium",
+      title: "Improve fresh-start Studio guidance",
+      problem: "The Studio can feel empty when no clips are loaded, leaving the operator without a clear next action.",
+      why: "A stronger empty state can point users toward YouTube ingest, manual upload, Vizard import, or Drive import before they hit a dead end.",
+      files: ["index.html", "app.js", "styles.css"],
+      implementation: "Add contextual empty-state guidance near the clip desk and source intake based on available providers and configured accounts.",
+      verification: "Start with no clips in local state and confirm the Studio shows one clear next step without blocking existing upload/generate flows.",
+    }));
+  }
+
+  if (approvedClips.length && !(state.queue || []).length) {
+    items.push(createOptimizationFeedItem({
+      id: "dynamic-approved-clips-empty-queue",
+      category: "clipflow",
+      priority: "high",
+      effort: "small",
+      title: "Improve approved clip to queue handoff",
+      problem: "Approved clips exist, but the queue is empty, so the publishing path is not obvious enough.",
+      why: "Operators need confidence that approved clips have not been lost and can be scheduled or sent to selected accounts.",
+      files: ["app.js", "index.html"],
+      implementation: "Surface a queue handoff CTA and explain which account readiness checks are still required before jobs are created.",
+      verification: "Approve clips with an empty queue and confirm the Optimization feed and Queue tab both explain the next step.",
+    }));
+  }
+
+  if (blockedEnabledAccounts.length) {
+    items.push(createOptimizationFeedItem({
+      id: "dynamic-enabled-accounts-blocked",
+      category: "clipflow",
+      priority: "high",
+      effort: "medium",
+      title: "Show clearer blocked publishing reasons",
+      problem: "Some enabled accounts are not publish-ready, but the user only sees broad setup-needed messaging.",
+      why: "Publishing blocks are faster to fix when each account explains whether it needs Vizard sync, reconnect, token setup, or Telegram chat details.",
+      files: ["app.js", "index.html"],
+      implementation: "Derive per-account readiness reasons and show them in account cards, queue previews, and blocked job rows.",
+      verification: "Enable accounts missing required IDs or credentials and confirm the UI names the exact missing requirement.",
+    }));
+  }
+
+  if (failedQueueJobs.length) {
+    items.push(createOptimizationFeedItem({
+      id: "dynamic-failed-queue-retry-controls",
+      category: "features",
+      priority: "high",
+      effort: "medium",
+      title: "Add retry controls for failed queue jobs",
+      problem: "Failed queue jobs are visible but do not give the operator a direct retry or repair action.",
+      why: "A retry button reduces recovery time after transient Vizard, Telegram, TikTok, or network failures.",
+      files: ["app.js", "styles.css"],
+      implementation: "Add retry and dismiss controls to failed queue rows while preserving the original job payload and error details.",
+      verification: "Force a queue job failure, retry it, and confirm status/error fields update without duplicating jobs.",
+    }));
+  }
+
+  if (processingProjects.length) {
+    items.push(createOptimizationFeedItem({
+      id: "dynamic-vizard-processing-visibility",
+      category: "features",
+      priority: "medium",
+      effort: "medium",
+      title: "Improve Vizard processing visibility",
+      problem: "Processing Vizard projects can sit in the library without enough progress context.",
+      why: "Operators need to know whether ClipFlow is polling, when it last checked, and what to do if Vizard is still generating clips.",
+      files: ["app.js", "styles.css"],
+      implementation: "Show last poll time, next refresh status, and a manual refresh action on processing Vizard project cards.",
+      verification: "Import a processing project and confirm polling state, last checked time, and refresh action render correctly.",
+    }));
+  }
+
+  if (driveHasIssue) {
+    items.push(createOptimizationFeedItem({
+      id: "dynamic-drive-service-diagnostics",
+      category: "clipflow",
+      priority: "high",
+      effort: "medium",
+      title: "Add Google Drive JSON diagnostics",
+      problem: "Google Drive service-account setup can fail silently or with broad errors.",
+      why: "JSON mode depends on server credentials and shared folder permissions, so diagnostics should identify missing config, bad JSON, or unshared folders.",
+      files: ["server.ts", "app.js", ".env.example"],
+      implementation: "Add a compact diagnostics panel showing service-account email, configured folder ID, connection status, and recommended next fix.",
+      verification: "Run with missing JSON, invalid JSON, and an unshared folder, then confirm each state shows a distinct recovery message.",
+    }));
+  }
+
+  if (hasLocalCredentialVaultData()) {
+    items.push(createOptimizationFeedItem({
+      id: "dynamic-credential-vault-safety-message",
+      category: "clipflow",
+      priority: "medium",
+      effort: "small",
+      title: "Add credential vault safety messaging",
+      problem: "The local credential vault remembers account data, but the UI does not clearly explain where it lives or how to clear it.",
+      why: "Users need trust and control when TikTok, Telegram, and Vizard credentials are remembered locally.",
+      files: ["app.js", "index.html"],
+      implementation: "Show a concise local-only storage note and a clear vault reset action near account management.",
+      verification: "Save local account data, reload, and confirm the safety note appears without exposing secret values.",
+    }));
+  }
+
+  [
+    {
+      id: "roadmap-queue-status-filters",
+      category: "features",
+      priority: "high",
+      effort: "medium",
+      title: "Queue filters for ready, blocked, uploaded, and failed",
+      problem: "The queue is a single list, which gets hard to scan as jobs move through different states.",
+      why: "Operators need to quickly isolate failed work, blocked accounts, and completed uploads.",
+      files: ["app.js", "index.html", "styles.css"],
+      implementation: "Add queue filter chips backed by job status/statusType and uploaded metadata.",
+      verification: "Create mixed queue jobs and confirm each filter returns the expected rows.",
+    },
+    {
+      id: "roadmap-copy-vizard-project-id",
+      category: "features",
+      priority: "medium",
+      effort: "small",
+      title: "Copy project ID for Vizard projects",
+      problem: "Vizard project IDs are useful for support and import recovery but are not always easy to copy.",
+      why: "One-click copy makes debugging and cross-tool handoff faster.",
+      files: ["app.js"],
+      implementation: "Expose a copy project ID control on every Vizard project card.",
+      verification: "Click copy on a project card and confirm the project ID is placed on the clipboard or selected in the import field.",
+    },
+    {
+      id: "roadmap-vizard-last-refreshed",
+      category: "features",
+      priority: "medium",
+      effort: "small",
+      title: "Vizard last-refreshed timestamps",
+      problem: "Users cannot easily tell how fresh a Vizard project card is.",
+      why: "Freshness context reduces repeated manual refreshes and confusion during clip generation.",
+      files: ["app.js"],
+      implementation: "Store and render a human-readable updatedAt timestamp for each Vizard project.",
+      verification: "Refresh projects and confirm timestamps update and persist after reload.",
+    },
+    {
+      id: "roadmap-mask-credential-vault-secrets",
+      category: "clipflow",
+      priority: "high",
+      effort: "medium",
+      title: "Mask local credential vault secrets",
+      problem: "Remembered credential fields need stronger masking wherever they appear in the UI.",
+      why: "Operators should be able to verify saved accounts without revealing tokens or API keys on screen.",
+      files: ["app.js", "styles.css"],
+      implementation: "Render masked secret previews with reveal-on-demand controls and never print raw tokens into status text.",
+      verification: "Save Vizard, Telegram, and direct TikTok credentials, then confirm all secret fields are masked after reload.",
+    },
+    {
+      id: "roadmap-inline-styles-to-css",
+      category: "clipflow",
+      priority: "medium",
+      effort: "large",
+      title: "Move repeated inline styles into styles.css",
+      problem: "Many repeated inline style blocks make UI changes slower and harder to review.",
+      why: "Central CSS classes improve consistency and reduce accidental layout regressions.",
+      files: ["app.js", "styles.css"],
+      implementation: "Extract repeated card, badge, empty-state, and action-button styles into reusable CSS classes.",
+      verification: "Compare Studio, Queue, Drive, and Optimization screens before/after to confirm visual parity.",
+    },
+    {
+      id: "roadmap-responsive-layout",
+      category: "clipflow",
+      priority: "medium",
+      effort: "large",
+      title: "Improve responsive layout",
+      problem: "Dense workflow panels can become cramped on small screens and narrow browser windows.",
+      why: "ClipFlow should stay usable for operators switching between browser, Drive, Vizard, and publishing tools.",
+      files: ["styles.css", "index.html"],
+      implementation: "Tighten responsive grid rules, form stacking, sticky actions, and table/card breakpoints.",
+      verification: "Check mobile, tablet, and desktop widths for overlapping text or clipped action controls.",
+    },
+    {
+      id: "roadmap-operator-onboarding-checklist",
+      category: "content",
+      priority: "medium",
+      effort: "medium",
+      title: "Operator onboarding checklist",
+      problem: "New operators need to understand source setup, Vizard connection, Drive sharing, accounts, and publishing readiness.",
+      why: "A checklist reduces setup mistakes and support loops.",
+      files: ["index.html", "app.js", "styles.css"],
+      implementation: "Add a collapsible checklist that marks setup tasks complete based on real app state.",
+      verification: "Toggle each setup condition and confirm the checklist status follows the current state.",
+    },
+    {
+      id: "roadmap-keyboard-shortcuts",
+      category: "features",
+      priority: "low",
+      effort: "medium",
+      title: "Keyboard shortcuts for approve, remix, and filter",
+      problem: "Reviewing many clips requires too many mouse actions.",
+      why: "Keyboard shortcuts make high-volume clip review faster.",
+      files: ["app.js", "index.html"],
+      implementation: "Add scoped shortcuts for approve, remix, next/previous clip, and filter switching with visible focus behavior.",
+      verification: "Use shortcuts while focus is outside text inputs and confirm form typing is never interrupted.",
+    },
+    {
+      id: "roadmap-caption-quality-checklist",
+      category: "content",
+      priority: "medium",
+      effort: "medium",
+      title: "Caption quality checklist",
+      problem: "Caption quality is important but currently depends on manual judgment.",
+      why: "A checklist can catch weak hooks, missing context, overlong captions, and poor platform fit before publishing.",
+      files: ["app.js", "index.html"],
+      implementation: "Score captions against hook strength, length, clarity, CTA, and platform match inside clip cards.",
+      verification: "Review clips with short, long, and missing captions and confirm the checklist flags the right issues.",
+    },
+    {
+      id: "roadmap-export-preset-labels",
+      category: "content",
+      priority: "low",
+      effort: "small",
+      title: "Export preset labels",
+      problem: "Export and caption choices are functional but not always self-explanatory.",
+      why: "Clear preset labels help operators pick the right format without learning implementation details.",
+      files: ["index.html", "app.js"],
+      implementation: "Add concise labels for presets such as Shorts, Reels, TikTok, clean captions, and kinetic captions.",
+      verification: "Switch presets and confirm labels update without changing existing saved preferences unexpectedly.",
+    },
+  ].forEach((item) => items.push(createOptimizationFeedItem(item)));
+
+  return mergeOptimizationStatuses(items);
+}
+
+function buildOptimizationSnapshot() {
+  const clips = state.clips || [];
+  const queue = state.queue || [];
+  const accounts = state.accounts || [];
+  const vizardProjects = state.vizardProjects || [];
+  const enabledAccounts = accounts.filter((account) => account.enabled);
+  const blockedAccounts = enabledAccounts.filter((account) => !isPublishReadyAccount(account));
+  const processingProjects = vizardProjects.filter((project) => {
+    return project.projectId && (project.status === "processing" || !project.clips?.length);
+  });
+
+  return {
+    clipCount: clips.length,
+    approvedClipCount: clips.filter((clip) => clip.approved).length,
+    queueCount: queue.length,
+    failedQueueCount: queue.filter((job) => job.status === "Failed").length,
+    connectedAccountCount: accounts.filter((account) => account.connected).length,
+    blockedAccountCount: blockedAccounts.length,
+    vizardProjectCount: vizardProjects.length,
+    processingVizardProjectCount: processingProjects.length,
+    googleDriveConfigured: Boolean(gdriveServiceStatus && gdriveServiceStatus.configured && gdriveServiceStatus.connected),
+    googleDriveHasError: Boolean(gdriveError),
+    clippingProvider: String(state.source?.clippingProvider || "local").slice(0, 40),
+    optimizationItemStatuses: { ...(state.optimizationStatuses || {}) },
+  };
+}
+
+async function requestGeminiOptimizationScan() {
+  if (state.aiOptimizationLoading) return;
+
+  state.aiOptimizationLoading = true;
+  state.aiOptimizationError = "";
+  renderOptimizationWorkspace();
+
+  try {
+    const response = await fetch(apiUrl("/api/optimization-scan"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ summary: buildOptimizationSnapshot() }),
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.error || "Gemini optimization scan failed.");
+    }
+
+    state.aiOptimizationItems = normalizeAiOptimizationItems(data.items || []);
+    state.aiOptimizationLoading = false;
+    state.aiOptimizationError = "";
+    state.optimizationActiveTab = "ai";
+    localStorage.setItem(storageKey, JSON.stringify(state));
+    renderOptimizationWorkspace();
+  } catch (error) {
+    state.aiOptimizationLoading = false;
+    state.aiOptimizationError = error.message || "Gemini optimization scan failed.";
+    localStorage.setItem(storageKey, JSON.stringify(state));
+    renderOptimizationWorkspace();
+  }
+}
+
 function generateRecommendations() {
+  return buildOptimizationFeed();
+}
+
+function generateLegacyRecommendations() {
   const recommendations = [];
 
   // === CONTENT CREATION RECOMMENDATIONS ===
@@ -4179,48 +4688,34 @@ function generateRecommendations() {
 }
 
 function runAudit() {
-  const btn = elements.runAuditBtn;
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = `<svg viewBox="0 0 24 24" class="anim-spin" style="width: 14px; height: 14px; fill: currentColor; margin-right: 4px; animation: spin 1s linear infinite;"><path d="M12 4V2C6.48 2 2 6.48 2 12h2c0-4.41 3.59-8 8-8zm0 16v2c5.52 0 10-4.48 10-10h-2c0 4.41-3.59 8-8 8z"/></svg> Auditing...`;
-  }
-
-  if (elements.optimizationListContainer) {
-    elements.optimizationListContainer.innerHTML = `
-      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; text-align: center; gap: 16px;">
-        <div style="width: 48px; height: 48px; border: 4px solid var(--line); border-top: 4px solid #6366f1; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-        <div style="display: flex; flex-direction: column; gap: 4px;">
-          <h4 style="font-size: 1.05rem; font-weight: bold; color: var(--ink);">Analyzing Feed Metadata...</h4>
-          <p style="color: var(--muted); font-size: 0.85rem; max-width: 400px; margin: 0 auto;">Our Assistant is grading current video formats, crop ratios, engagement captions, and distribution timings.</p>
-        </div>
-      </div>
-    `;
-  }
-
-  setTimeout(() => {
-    state.optimizations = generateRecommendations();
-    state.hasRunOptimizationAudit = true;
-    saveAndRender();
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = `<svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor; margin-right: 2px;"><path d="m12 2 1.5 5.1L19 8.6l-5.5 1.5L12 15l-1.5-4.9L5 8.6l5.5-1.5L12 2Zm6 12 1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3ZM5 14l.8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14Z"></path></svg> Run AI Audit`;
-    }
-    setClipStatus("AI Campaign optimization audit compiled successfully!", "ready");
-    renderOptimizationWorkspace();
-  }, 1600);
+  state.optimizations = buildOptimizationFeed();
+  state.hasRunOptimizationAudit = true;
+  localStorage.setItem(storageKey, JSON.stringify(state));
+  renderOptimizationWorkspace();
 }
 
 function renderOptimizationWorkspace() {
   if (!elements.optimizationListContainer) return;
 
-  state.optimizations = state.optimizations || [];
-  state.hasRunOptimizationAudit = state.hasRunOptimizationAudit || false;
+  state.optimizationStatuses = normalizeOptimizationStatuses(state.optimizationStatuses, state.optimizations);
+  state.optimizations = buildOptimizationFeed();
+  state.aiOptimizationItems = mergeOptimizationStatuses(normalizeAiOptimizationItems(state.aiOptimizationItems || []));
+  state.hasRunOptimizationAudit = true;
   state.optimizationActiveTab = state.optimizationActiveTab || "content";
 
   const activeTab = state.optimizationActiveTab;
+  const activeSourceItems = activeTab === "ai" ? state.aiOptimizationItems : state.optimizations;
+  const visibleItems = activeSourceItems.filter((item) => item.status !== "dismissed");
+  const categoryItems = activeTab === "ai" ? visibleItems : visibleItems.filter((item) => item.category === activeTab);
+  const summary = {
+    high: visibleItems.filter((item) => item.priority === "high").length,
+    planned: visibleItems.filter((item) => item.status === "planned").length,
+    inProgress: visibleItems.filter((item) => item.status === "in-progress").length,
+    done: visibleItems.filter((item) => item.status === "done").length,
+  };
 
-  // Bind Run Audit button
   if (elements.runAuditBtn) {
+    elements.runAuditBtn.textContent = "Refresh feed";
     if (!elements.runAuditBtn.dataset.listenerAttached) {
       elements.runAuditBtn.addEventListener("click", () => {
         runAudit();
@@ -4229,172 +4724,144 @@ function renderOptimizationWorkspace() {
     }
   }
 
-  // Bind Tab Click Listeners
-  if (elements.optTabContent) {
-    if (!elements.optTabContent.dataset.listenerAttached) {
-      elements.optTabContent.addEventListener("click", () => {
-        state.optimizationActiveTab = "content";
+  [
+    ["content", elements.optTabContent],
+    ["clipflow", elements.optTabClipflow],
+    ["features", elements.optTabFeatures],
+    ["ai", elements.optTabAi],
+  ].forEach(([tabName, tabElement]) => {
+    if (!tabElement) return;
+    if (!tabElement.dataset.listenerAttached) {
+      tabElement.addEventListener("click", () => {
+        state.optimizationActiveTab = tabName;
         renderOptimizationWorkspace();
       });
-      elements.optTabContent.dataset.listenerAttached = "true";
+      tabElement.dataset.listenerAttached = "true";
     }
-  }
+    const selected = activeTab === tabName;
+    tabElement.style.color = selected ? "#818cf8" : "var(--muted)";
+    tabElement.style.borderBottom = selected ? "2px solid #6366f1" : "2px solid transparent";
+  });
 
-  if (elements.optTabClipflow) {
-    if (!elements.optTabClipflow.dataset.listenerAttached) {
-      elements.optTabClipflow.addEventListener("click", () => {
-        state.optimizationActiveTab = "clipflow";
-        renderOptimizationWorkspace();
-      });
-      elements.optTabClipflow.dataset.listenerAttached = "true";
-    }
-  }
-
-  if (elements.optTabFeatures) {
-    if (!elements.optTabFeatures.dataset.listenerAttached) {
-      elements.optTabFeatures.addEventListener("click", () => {
-        state.optimizationActiveTab = "features";
-        renderOptimizationWorkspace();
-      });
-      elements.optTabFeatures.dataset.listenerAttached = "true";
-    }
-  }
-
-  // Apply visual styling to Active/Inactive Tabs
-  if (elements.optTabContent && elements.optTabClipflow && elements.optTabFeatures) {
-    if (activeTab === "content") {
-      elements.optTabContent.style.color = "#818cf8";
-      elements.optTabContent.style.borderBottom = "2px solid #6366f1";
-      elements.optTabClipflow.style.color = "var(--muted)";
-      elements.optTabClipflow.style.borderBottom = "2px solid transparent";
-      elements.optTabFeatures.style.color = "var(--muted)";
-      elements.optTabFeatures.style.borderBottom = "2px solid transparent";
-      
-      const intro = document.querySelector("#optimizationIntroSpan");
-      if (intro) {
-        intro.innerHTML = "Review and **Approve** modular creators tools proposed by our Smart Assistant to expand your content creation potentials instantly.";
-      }
-    } else if (activeTab === "clipflow") {
-      elements.optTabClipflow.style.color = "#818cf8";
-      elements.optTabClipflow.style.borderBottom = "2px solid #6366f1";
-      elements.optTabContent.style.color = "var(--muted)";
-      elements.optTabContent.style.borderBottom = "2px solid transparent";
-      elements.optTabFeatures.style.color = "var(--muted)";
-      elements.optTabFeatures.style.borderBottom = "2px solid transparent";
-
-      const intro = document.querySelector("#optimizationIntroSpan");
-      if (intro) {
-        intro.innerHTML = "Review and **Approve** performance optimization & infrastructure configuration tweaks to raise ClipFlow execution capability.";
-      }
-    } else {
-      elements.optTabFeatures.style.color = "#818cf8";
-      elements.optTabFeatures.style.borderBottom = "2px solid #6366f1";
-      elements.optTabContent.style.color = "var(--muted)";
-      elements.optTabContent.style.borderBottom = "2px solid transparent";
-      elements.optTabClipflow.style.color = "var(--muted)";
-      elements.optTabClipflow.style.borderBottom = "2px solid transparent";
-
-      const intro = document.querySelector("#optimizationIntroSpan");
-      if (intro) {
-        intro.innerHTML = "Review and **Approve** high-level application modules proposed by our System Assistant to add new tabs & workspaces instantly.";
-      }
-    }
+  const intro = document.querySelector("#optimizationIntroSpan");
+  if (intro) {
+    const introByTab = {
+      content: "Review constant content improvements based on the current ClipFlow workspace state.",
+      clipflow: "Review constant ClipFlow platform improvements, diagnostics, and workflow reliability work.",
+      features: "Review constant feature roadmap items for operator speed, visibility, and publishing control.",
+      ai: "Ask Gemini for deeper improvements based on a safe summary of the current workspace.",
+    };
+    intro.innerHTML = introByTab[activeTab] || introByTab.content;
   }
 
   elements.optimizationListContainer.innerHTML = "";
+  elements.optimizationListContainer.classList.add("optimization-feed");
 
-  if (!state.hasRunOptimizationAudit) {
-    elements.optimizationListContainer.innerHTML = `
-      <div class="empty-state" style="padding: 40px; text-align: center; background: #161F32; border: 1.5px dashed var(--line); border-radius: 8px; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 280px;">
-        <span style="font-size: 2.5rem;">🪄</span>
-        <h3 style="font-size: 1.15rem; font-weight: bold; margin: 0; color: var(--ink);">Analyze Workspace for Modular Improvements</h3>
-        <p style="color: var(--muted); font-size: 0.85rem; max-width: 380px; margin: 0 auto 12px;">Let the Smart System Assistant run a diagnostic overview on your workflow setup to propose custom content engines and app-level accelerations.</p>
-        <button class="primary-button" id="startAuditWorkspaceBtn" style="background: #6366f1; border: none; color: white; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; margin: 0 auto; height: auto;">
-          <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="m12 2 1.5 5.1L19 8.6l-5.5 1.5L12 15l-1.5-4.9L5 8.6l5.5-1.5L12 2z"/></svg>
-          Perform Initial System Diagnostic
-        </button>
-      </div>
+  if (activeTab === "ai") {
+    const aiControls = document.createElement("div");
+    aiControls.className = "optimization-ai-controls";
+    aiControls.innerHTML = `
+      <button class="primary-button" type="button" id="askGeminiOptimizationBtn" ${state.aiOptimizationLoading ? "disabled" : ""}>
+        ${state.aiOptimizationLoading ? "Asking Gemini..." : "Ask Gemini for deeper improvements"}
+      </button>
+      ${state.aiOptimizationError ? `<p class="optimization-ai-error">${escapeHtml(state.aiOptimizationError)}</p>` : ""}
     `;
-
-    const startBtn = elements.optimizationListContainer.querySelector("#startAuditWorkspaceBtn");
-    if (startBtn) {
-      startBtn.addEventListener("click", () => {
-        runAudit();
+    const askBtn = aiControls.querySelector("#askGeminiOptimizationBtn");
+    if (askBtn) {
+      askBtn.addEventListener("click", () => {
+        requestGeminiOptimizationScan();
       });
     }
+    elements.optimizationListContainer.appendChild(aiControls);
+  }
+
+  const summaryRow = document.createElement("div");
+  summaryRow.className = "optimization-summary";
+  summaryRow.innerHTML = `
+    <div>
+      <strong>${summary.high}</strong>
+      <span>High priority</span>
+    </div>
+    <div>
+      <strong>${summary.planned}</strong>
+      <span>Planned</span>
+    </div>
+    <div>
+      <strong>${summary.inProgress}</strong>
+      <span>In progress</span>
+    </div>
+    <div>
+      <strong>${summary.done}</strong>
+      <span>Done</span>
+    </div>
+  `;
+  elements.optimizationListContainer.appendChild(summaryRow);
+
+  if (!categoryItems.length) {
+    const empty = document.createElement("div");
+    empty.className = "optimization-empty";
+    empty.innerHTML = `
+      <span>✓</span>
+      <h3>${activeTab === "ai" ? "No Gemini suggestions yet" : `No visible ${activeTab} improvements`}</h3>
+      <p>${activeTab === "ai" ? "Use Ask Gemini for deeper improvements to generate AI-powered suggestions from a safe workspace summary." : "Dismissed items are hidden by default. Use Refresh feed to rebuild the feed from current workspace state."}</p>
+    `;
+    elements.optimizationListContainer.appendChild(empty);
     return;
   }
 
-  const pendingOpts = state.optimizations.filter(o => o.status === "pending" && o.category === activeTab);
-
-  if (!pendingOpts.length) {
-    elements.optimizationListContainer.innerHTML = `
-      <div class="empty-state" style="padding: 40px; text-align: center; background: #161F32; border: 1.5px dashed var(--line); border-radius: 8px; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 280px;">
-        <span style="font-size: 2.5rem; color: #10b981;">🎉</span>
-        <h3 style="font-size: 1.15rem; font-weight: bold; margin: 0; color: var(--ink);">All ${activeTab === "content" ? "Creator Utilities" : "App Configurations"} Evaluated!</h3>
-        <p style="color: var(--muted); font-size: 0.85rem; max-width: 350px; margin: 0 auto 12px;">Excellent! You've approved or handled all recommended options inside this tab. Feel free to explore other parameters or run another scan.</p>
-        <button class="secondary-button" id="reRunAuditWorkspaceBtn" style="padding: 6px 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; margin: 0 auto; height: auto;">
-          🔄 Perform New Audit Re-Run
-        </button>
-      </div>
-    `;
-
-    const reRunBtn = elements.optimizationListContainer.querySelector("#reRunAuditWorkspaceBtn");
-    if (reRunBtn) {
-      reRunBtn.addEventListener("click", () => {
-        runAudit();
-      });
-    }
-    return;
-  }
-
-  pendingOpts.forEach((opt) => {
+  categoryItems.forEach((opt) => {
     const card = document.createElement("article");
     card.className = "optimization-card animate-subtle";
     card.dataset.optId = opt.id;
-    card.setAttribute("style", "display: flex; flex-direction: column; gap: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: #161F32; position: relative; border-left: 4px solid #6366f1; text-align: left;");
 
     card.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px;">
+      <div class="optimization-card-header">
         <div>
-          <span style="display: inline-block; font-size: 0.725rem; font-weight: 800; text-transform: uppercase; color: #818cf8; background: rgba(99, 102, 241, 0.1); border-radius: 99px; padding: 2px 8px; margin-bottom: 6px; letter-spacing: 0.05em;">${escapeHtml(opt.type)}</span>
-          <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--ink); margin: 0;">${escapeHtml(opt.title)}</h3>
+          <div class="optimization-meta">
+            ${opt.source === "gemini" ? `<span class="optimization-source">Gemini suggested</span>` : ""}
+            <span class="optimization-priority">${escapeHtml(opt.priority)} priority</span>
+            <span class="optimization-effort">${escapeHtml(opt.effort)} effort</span>
+            <span class="optimization-status">${escapeHtml(optimizationStatusLabels[opt.status] || opt.status)}</span>
+          </div>
+          <h3>${escapeHtml(opt.title)}</h3>
         </div>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <button class="mini-button opt-dismiss-btn" data-opt-id="${opt.id}" style="height: 30px; font-size: 0.75rem; border: 1px solid var(--line); color: var(--muted); cursor: pointer; background: transparent; padding: 2px 10px;">Dismiss</button>
-          <button class="mini-button active opt-approve-btn" data-opt-id="${opt.id}" style="height: 30px; font-size: 0.75rem; background: #10b981; border: none; font-weight: bold; color: white; display: inline-flex; align-items: center; gap: 4px; padding: 2px 12px; cursor: pointer;">
-            <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
-            Approve & Apply
-          </button>
+        <div class="optimization-actions">
+          <button class="mini-button opt-status-btn" data-opt-id="${opt.id}" data-status="planned">Plan</button>
+          <button class="mini-button opt-status-btn" data-opt-id="${opt.id}" data-status="in-progress">Start</button>
+          <button class="mini-button active opt-status-btn" data-opt-id="${opt.id}" data-status="done">Mark done</button>
+          <button class="mini-button opt-status-btn" data-opt-id="${opt.id}" data-status="dismissed">Dismiss</button>
+          <button class="mini-button opt-copy-prompt-btn" data-opt-id="${opt.id}">Copy prompt</button>
         </div>
       </div>
 
-      <p style="font-size: 0.85rem; color: var(--muted); margin: 0; line-height: 1.45;">${escapeHtml(opt.description)}</p>
+      <p>${escapeHtml(opt.problem || opt.description)}</p>
+      ${opt.why ? `<p><strong>Why:</strong> ${escapeHtml(opt.why)}</p>` : ""}
 
-      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; font-size: 0.8rem;">
-        <div style="border-right: 1px solid var(--line); padding-right: 12px;">
-          <span style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 2px;">Original Configuration</span>
-          <span style="font-family: var(--font-mono); color: #f87171; overflow: hidden; text-overflow: ellipsis; display: block; white-space: nowrap;">${escapeHtml(opt.before)}</span>
+      <div class="optimization-files">
+        <div>
+          <span>Files</span>
+          <code>${escapeHtml(opt.before || (opt.files || []).join(", "))}</code>
         </div>
-        <div style="padding-left: 6px;">
-          <span style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: #34d399; display: block; margin-bottom: 2px;">Post-Approval Value</span>
-          <span style="font-family: var(--font-mono); color: #34d399; overflow: hidden; text-overflow: ellipsis; display: block; white-space: nowrap;">${escapeHtml(opt.after)}</span>
+        <div>
+          <span>Implementation</span>
+          <code>${escapeHtml(opt.after || opt.implementation)}</code>
         </div>
       </div>
+      ${opt.verification ? `<p><strong>Verify:</strong> ${escapeHtml(opt.verification)}</p>` : ""}
     `;
 
-    const approveBtn = card.querySelector(".opt-approve-btn");
-    const dismissBtn = card.querySelector(".opt-dismiss-btn");
-
-    if (approveBtn) {
-      approveBtn.addEventListener("click", () => {
-        applyOptimization(opt.id);
+    card.querySelectorAll(".opt-status-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        setOptimizationStatus(button.dataset.optId, button.dataset.status);
+        state.optimizations = buildOptimizationFeed();
+        renderOptimizationWorkspace();
       });
-    }
+    });
 
-    if (dismissBtn) {
-      dismissBtn.addEventListener("click", () => {
-        dismissOptimization(opt.id);
+    const copyPromptBtn = card.querySelector(".opt-copy-prompt-btn");
+    if (copyPromptBtn) {
+      copyPromptBtn.addEventListener("click", () => {
+        copyOptimizationPrompt(opt);
       });
     }
 
@@ -4403,66 +4870,21 @@ function renderOptimizationWorkspace() {
 }
 
 function applyOptimization(optId) {
-  state.optimizations = state.optimizations || [];
+  state.optimizations = buildOptimizationFeed();
   const opt = state.optimizations.find(o => o.id === optId);
   if (!opt) return;
 
-  try {
-    state.preferences = state.preferences || {};
-
-    if (opt.action === "activate-scriptboard") {
-      state.preferences.scriptboardEnabled = true;
-      setClipStatus("Applied: Unlocked the AI Storyboard / Scripting container in Intake Panel!", "ready");
-    } else if (opt.action === "enable-kinetic-captions") {
-      state.preferences.kineticEnabled = true;
-      state.source.captionStyle = "kinetic";
-      setClipStatus("Applied: Enriched subtitle presets and pre-selected 'Kinetic Pop (Viral)'!", "ready");
-    } else if (opt.action === "activate-seo-hashtags") {
-      state.preferences.seoHashtags = true;
-      setClipStatus("Applied: Unlocked interactive click-to-copy trending SEO hashtags!", "ready");
-    } else if (opt.action === "enable-safe-overlays") {
-      state.preferences.safeOverlays = true;
-      setClipStatus("Applied: Rendered transparent social grid safe overlay on previews!", "ready");
-    } else if (opt.action === "enable-wasm") {
-      state.preferences.wasmAcceleration = true;
-      setClipStatus("Applied: Activated parallel WebAssembly GPU rendering cores (60 FPS fallback)!", "ready");
-    } else if (opt.action === "enable-indexeddb") {
-      state.preferences.indexedDbCache = true;
-      setClipStatus("Applied: Allocated persistent IndexedDB video buffers caching index!", "ready");
-    } else if (opt.action === "enable-multi-vault") {
-      state.preferences.multiVaultEnabled = true;
-      setClipStatus("Applied: Unlocked credentials manager connections profile switcher switcher!", "ready");
-    } else if (opt.action === "enable-gdrive-sync") {
-      state.preferences.gdriveSyncEnabled = true;
-      setClipStatus("Applied: Google Drive integration set to automatically sync dispatches in real-time!", "ready");
-    } else if (opt.action === "enable-analytics") {
-      state.preferences.analyticsEnabled = true;
-      setClipStatus("Applied: Injected real-time campaign performance Analytics view into the sidebar navigation!", "ready");
-    } else if (opt.action === "enable-settings") {
-      state.preferences.settingsEnabled = true;
-      setClipStatus("Applied: Deployed advanced application Preferences & Settings view into the sidebar navigation!", "ready");
-    }
-
-    opt.status = "approved";
-    saveAndRender();
-    renderOptimizationWorkspace();
-    render();
-
-  } catch (error) {
-    console.error("Optimization error", error);
-    setClipStatus(`Could not apply optimization: ${error.message}`, "error");
-  }
+  setOptimizationStatus(opt.id, "done");
+  renderOptimizationWorkspace();
 }
 
 function dismissOptimization(optId) {
-  state.optimizations = state.optimizations || [];
+  state.optimizations = buildOptimizationFeed();
   const opt = state.optimizations.find(o => o.id === optId);
   if (!opt) return;
 
-  opt.status = "dismissed";
-  saveAndRender();
+  setOptimizationStatus(opt.id, "dismissed");
   renderOptimizationWorkspace();
-  setClipStatus("Dismissed optimization opportunity.", "ready");
 }
 
 // === NEW ACTIONABLE VISUAL RENDERERS FOR APPROVED ADDONS ===

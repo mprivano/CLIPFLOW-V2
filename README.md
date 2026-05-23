@@ -28,6 +28,21 @@ For Vizard AI clipping, start it with a Vizard API key:
 VIZARDAI_API_KEY="your_vizard_key_here" npm start
 ```
 
+For Gemini-powered Optimization suggestions:
+
+1. Go to Google AI Studio.
+2. Create a Gemini API key.
+3. Create or edit `.env` in the project root.
+4. Add:
+
+```bash
+GEMINI_API_KEY=your_key_here
+```
+
+5. Restart ClipFlow.
+
+Do not commit `.env`.
+
 Open `http://127.0.0.1:5059` in a browser, or use the port you started it with. The app saves demo state in local storage.
 
 ## Link Accounts And Publish
