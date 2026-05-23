@@ -36,6 +36,11 @@ const vizardApiKey = process.env.VIZARDAI_API_KEY || "";
 const transcriptionModel = process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
 const analysisModel = process.env.OPENAI_ANALYSIS_MODEL || "gpt-5.4-mini";
 const maxTranscriptionBytes = 24 * 1024 * 1024;
+let googleDriveSession: any = null;
+let googleOAuthClientId: string | null = null;
+const gdriveServiceFolderId = String(process.env.GDRIVE_FOLDER_ID || process.env.GOOGLE_DRIVE_FOLDER_ID || "root").trim();
+let gdriveServiceCredentialsCache: any = undefined;
+let gdriveServiceTokenCache: { accessToken: string; expiresAt: number } | null = null;
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -83,6 +88,70 @@ async function start() {
           transcriptionModel: geminiApiKey ? "gemini-3.5-flash" : transcriptionModel,
           analysisModel: geminiApiKey ? "gemini-3.5-flash" : analysisModel,
         });
+        return;
+      }
+
+      if (url.pathname === "/api/google-drive-session") {
+        if (request.method === "GET") {
+          sendJson(response, getGoogleDriveSession());
+          return;
+        }
+        if (request.method === "POST") {
+          const result = await handleGoogleDriveSessionSave(request);
+          sendJson(response, result);
+          return;
+        }
+        if (request.method === "DELETE") {
+          googleDriveSession = null;
+          sendJson(response, { ok: true, connected: false });
+          return;
+        }
+      }
+
+      if (url.pathname === "/api/open-google-drive-browser" && request.method === "POST") {
+        const result = await handleOpenGoogleDriveBrowser();
+        sendJson(response, result);
+        return;
+      }
+
+      if (url.pathname === "/api/open-url" && request.method === "POST") {
+        const result = await handleOpenUrlRequest(request);
+        sendJson(response, result);
+        return;
+      }
+
+      if (url.pathname === "/api/download" && request.method === "GET") {
+        await handleDownloadRequest(url, request, response);
+        return;
+      }
+
+      if (url.pathname === "/api/drive/service-status" && request.method === "GET") {
+        const result = await getServiceDriveStatus();
+        sendJson(response, result);
+        return;
+      }
+
+      if (url.pathname === "/api/drive/files" && request.method === "GET") {
+        const result = await handleServiceDriveFiles(url);
+        sendJson(response, result);
+        return;
+      }
+
+      if (url.pathname === "/api/drive/folders" && request.method === "GET") {
+        const result = await handleServiceDriveFolders(url);
+        sendJson(response, result);
+        return;
+      }
+
+      if (url.pathname === "/api/drive/folders" && request.method === "POST") {
+        const result = await handleServiceDriveCreateFolder(request);
+        sendJson(response, result);
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/drive/file/") && (request.method === "GET" || request.method === "HEAD")) {
+        const fileId = decodeURIComponent(url.pathname.slice("/api/drive/file/".length));
+        await streamServiceDriveFile(request, response, fileId);
         return;
       }
 
@@ -261,6 +330,820 @@ async function start() {
     console.log(`AI understanding: ${openaiApiKey ? "enabled" : "waiting for OPENAI_API_KEY"}`);
     console.log(`Vizard AI: ${vizardApiKey ? "enabled" : "waiting for VIZARDAI_API_KEY"}`);
   });
+}
+
+function getGoogleDriveSession() {
+  if (!googleDriveSession?.accessToken || Date.now() > googleDriveSession.expiresAt) {
+    googleDriveSession = null;
+    return { connected: false };
+  }
+
+  return {
+    connected: true,
+    accessToken: googleDriveSession.accessToken,
+    user: googleDriveSession.user,
+    connectedAt: googleDriveSession.connectedAt,
+    expiresAt: googleDriveSession.expiresAt,
+  };
+}
+
+async function handleGoogleDriveSessionSave(request: any) {
+  const body = await readJsonRequest(request);
+  const accessToken = String(body.accessToken || "").trim();
+  if (!accessToken) {
+    throw new Error("Missing Google Drive access token.");
+  }
+
+  googleDriveSession = {
+    accessToken,
+    user: sanitizeGoogleUser(body.user || {}),
+    connectedAt: Date.now(),
+    expiresAt: Date.now() + 55 * 60 * 1000,
+  };
+
+  return {
+    ok: true,
+    connected: true,
+    user: googleDriveSession.user,
+    connectedAt: googleDriveSession.connectedAt,
+    expiresAt: googleDriveSession.expiresAt,
+  };
+}
+
+function sanitizeGoogleUser(user: any) {
+  return {
+    displayName: String(user.displayName || "").slice(0, 160),
+    email: String(user.email || "").slice(0, 240),
+    photoURL: String(user.photoURL || "").slice(0, 500),
+    uid: String(user.uid || "").slice(0, 160),
+  };
+}
+
+async function getServiceDriveStatus() {
+  const credentials = await getServiceDriveCredentials();
+  if (!credentials) {
+    return {
+      mode: "oauth",
+      configured: false,
+      connected: false,
+      message: "Service account credentials are not configured.",
+      defaultFolderId: gdriveServiceFolderId || "root",
+    };
+  }
+
+  try {
+    await getServiceDriveAccessToken();
+  } catch (error: any) {
+    return {
+      mode: "oauth",
+      configured: true,
+      connected: false,
+      message: error.message || "Service account credentials exist, but token exchange failed.",
+      email: credentials.client_email,
+      defaultFolderId: gdriveServiceFolderId || "root",
+    };
+  }
+
+  return {
+    mode: "service",
+    configured: true,
+    connected: true,
+    email: credentials.client_email,
+    displayName: "Workspace Google Drive",
+    defaultFolderId: gdriveServiceFolderId || "root",
+  };
+}
+
+async function handleServiceDriveFiles(url: URL) {
+  const folderId = sanitizeDriveId(url.searchParams.get("folderId") || gdriveServiceFolderId || "root");
+  const files = await listServiceDriveCompiledFiles(folderId);
+  return {
+    ok: true,
+    folderId,
+    files,
+  };
+}
+
+async function handleServiceDriveFolders(url: URL) {
+  const parentId = sanitizeDriveId(url.searchParams.get("parentId") || "root");
+  const parentQuery = `'${escapeDriveQuery(parentId)}' in parents`;
+  const ownFolders = await driveServiceListFiles(
+    `${parentQuery} and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    "id,name,modifiedTime",
+    "name asc",
+    200,
+  );
+
+  let sharedFolders: any[] = [];
+  if (parentId === "root") {
+    sharedFolders = await driveServiceListFiles(
+      "sharedWithMe = true and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+      "id,name,modifiedTime",
+      "name asc",
+      200,
+    );
+  }
+
+  const normalizedOwnFolders = ownFolders.map((folder: any) => ({
+    ...folder,
+    sharedWithMe: false,
+  }));
+  const normalizedSharedFolders = sharedFolders.map((folder: any) => ({
+    ...folder,
+    sharedWithMe: true,
+  }));
+
+  const folders = mergeDriveItemsById([...normalizedSharedFolders, ...normalizedOwnFolders])
+    .sort((a: any, b: any) => {
+      const sharedOrder = Number(Boolean(b.sharedWithMe)) - Number(Boolean(a.sharedWithMe));
+      if (sharedOrder !== 0) return sharedOrder;
+      return String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" });
+    });
+
+  return {
+    ok: true,
+    parentId,
+    folders,
+  };
+}
+
+async function handleServiceDriveCreateFolder(request: any) {
+  const body = await readJsonRequest(request);
+  const name = String(body.name || "").trim().slice(0, 120);
+  if (!name) {
+    throw new Error("Folder name cannot be empty.");
+  }
+
+  const parentId = sanitizeDriveId(body.parentId || gdriveServiceFolderId || "root");
+  const metadata: any = {
+    name,
+    mimeType: "application/vnd.google-apps.folder",
+  };
+  if (parentId && parentId !== "root") {
+    metadata.parents = [parentId];
+  }
+
+  const response = await driveServiceFetch("https://www.googleapis.com/drive/v3/files?fields=id,name", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(metadata),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error?.message || `Google Drive folder creation failed (${response.status}).`);
+  }
+
+  return {
+    ok: true,
+    folder: {
+      id: String(data.id || ""),
+      name: String(data.name || name),
+    },
+  };
+}
+
+async function streamServiceDriveFile(request: any, response: any, fileId: string) {
+  const safeFileId = sanitizeDriveId(fileId);
+  if (!safeFileId || safeFileId === "root") {
+    response.writeHead(400);
+    response.end("Invalid Google Drive file ID.");
+    return;
+  }
+
+  const headers: any = {};
+  if (request.headers.range) {
+    headers.Range = request.headers.range;
+  }
+
+  const driveRes = await driveServiceFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(safeFileId)}?alt=media`, {
+    method: "GET",
+    headers,
+  });
+
+  if (!driveRes.ok) {
+    const errorText = await driveRes.text().catch(() => "");
+    response.writeHead(driveRes.status || 502, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
+      "Accept-Ranges": "bytes",
+    });
+    response.end(errorText || "Google Drive media fetch failed.");
+    return;
+  }
+
+  const outHeaders: any = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Range",
+    "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "no-store",
+  };
+  const passthrough = [
+    "content-type",
+    "content-length",
+    "content-range",
+    "etag",
+    "last-modified",
+  ];
+  for (const key of passthrough) {
+    const value = driveRes.headers.get(key);
+    if (value) {
+      outHeaders[key] = value;
+    }
+  }
+  if (!outHeaders["content-type"]) {
+    outHeaders["content-type"] = "video/mp4";
+  }
+
+  response.writeHead(driveRes.status, outHeaders);
+  if (request.method === "HEAD") {
+    response.end();
+    return;
+  }
+
+  if (!driveRes.body) {
+    response.end();
+    return;
+  }
+
+  if (typeof (driveRes.body as any).getReader === "function") {
+    const reader = (driveRes.body as any).getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      response.write(value);
+    }
+    response.end();
+    return;
+  }
+
+  if (typeof Symbol.asyncIterator !== "undefined" && (driveRes.body as any)[Symbol.asyncIterator]) {
+    for await (const chunk of (driveRes.body as any)) {
+      response.write(chunk);
+    }
+    response.end();
+    return;
+  }
+
+  response.end();
+}
+
+async function listServiceDriveCompiledFiles(parentId: string) {
+  const parentQuery = `'${escapeDriveQuery(parentId)}' in parents`;
+  const ownChildFolders = await driveServiceListFiles(
+    `${parentQuery} and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    "id,name,modifiedTime",
+    "modifiedTime desc",
+    80,
+  );
+
+  let sharedChildFolders: any[] = [];
+  if (parentId === "root") {
+    sharedChildFolders = await driveServiceListFiles(
+      "sharedWithMe = true and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+      "id,name,modifiedTime",
+      "modifiedTime desc",
+      80,
+    );
+  }
+  const childFolders = mergeDriveItemsById([...ownChildFolders, ...sharedChildFolders]);
+
+  const ownDirectFiles = await driveServiceListFiles(
+    `${parentQuery} and mimeType = 'video/mp4' and trashed = false`,
+    "id,name,mimeType,size,modifiedTime,description",
+    "modifiedTime desc",
+    80,
+  );
+
+  let sharedDirectFiles: any[] = [];
+  if (parentId === "root") {
+    sharedDirectFiles = await driveServiceListFiles(
+      "sharedWithMe = true and mimeType = 'video/mp4' and trashed = false",
+      "id,name,mimeType,size,modifiedTime,description",
+      "modifiedTime desc",
+      120,
+    );
+  }
+  const directFiles = mergeDriveItemsById([...ownDirectFiles, ...sharedDirectFiles]);
+
+  let subFiles: any[] = [];
+  if (childFolders.length) {
+    const folderClauses = childFolders.map((folder: any) => `'${escapeDriveQuery(folder.id)}' in parents`);
+    const subQuery = `(${folderClauses.join(" or ")}) and trashed = false and (mimeType = 'video/mp4' or mimeType = 'application/json' or name = 'metadata.json')`;
+    subFiles = await driveServiceListFiles(
+      subQuery,
+      "id,name,mimeType,size,modifiedTime,description,parents",
+      "modifiedTime desc",
+      240,
+    );
+  }
+
+  const compiled: any[] = [];
+  const metadataByJsonFileId: Record<string, any> = {};
+
+  for (const folder of childFolders) {
+    const mp4 = subFiles.find((item) => Array.isArray(item.parents) && item.parents.includes(folder.id) && item.mimeType === "video/mp4");
+    if (!mp4) continue;
+
+    const jsonFile = subFiles.find((item) => Array.isArray(item.parents) && item.parents.includes(folder.id) && (item.mimeType === "application/json" || item.name === "metadata.json"));
+
+    let extra = null;
+    if (jsonFile?.id) {
+      if (metadataByJsonFileId[jsonFile.id] === undefined) {
+        metadataByJsonFileId[jsonFile.id] = await fetchDriveJsonMetadata(jsonFile.id);
+      }
+      extra = metadataByJsonFileId[jsonFile.id];
+    }
+    if (!extra && mp4.description) {
+      extra = parseClipflowMetadataFromDescription(mp4.description);
+    }
+
+    compiled.push({
+      id: String(mp4.id || ""),
+      name: String(folder.name || mp4.name || "Video"),
+      modifiedTime: String(folder.modifiedTime || mp4.modifiedTime || ""),
+      size: String(mp4.size || ""),
+      extra,
+    });
+  }
+
+  for (const file of directFiles) {
+    compiled.push({
+      id: String(file.id || ""),
+      name: String(file.name || "Video"),
+      modifiedTime: String(file.modifiedTime || ""),
+      size: String(file.size || ""),
+      extra: parseClipflowMetadataFromDescription(file.description),
+    });
+  }
+
+  compiled.sort((a, b) => {
+    const timeA = Date.parse(a.modifiedTime || "") || 0;
+    const timeB = Date.parse(b.modifiedTime || "") || 0;
+    return timeB - timeA;
+  });
+
+  return compiled;
+}
+
+function mergeDriveItemsById(items: any[]) {
+  const seen = new Set<string>();
+  const merged: any[] = [];
+  for (const item of items) {
+    const id = String(item?.id || "");
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    merged.push(item);
+  }
+  return merged;
+}
+
+function parseClipflowMetadataFromDescription(description: any) {
+  if (!description) return null;
+  try {
+    const parsed = JSON.parse(String(description));
+    if (parsed && typeof parsed === "object" && parsed.clipflow_metadata) {
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+async function fetchDriveJsonMetadata(fileId: string) {
+  if (!fileId) return null;
+  const response = await driveServiceFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
+    method: "GET",
+  });
+  if (!response.ok) return null;
+  try {
+    const data = await response.json();
+    if (data && typeof data === "object" && data.clipflow_metadata) {
+      return data;
+    }
+  } catch {}
+  return null;
+}
+
+async function driveServiceListFiles(query: string, fields: string, orderBy = "modifiedTime desc", pageSize = 100) {
+  const params = new URLSearchParams();
+  params.set("q", query);
+  params.set("fields", `files(${fields})`);
+  params.set("orderBy", orderBy);
+  params.set("pageSize", String(pageSize));
+  params.set("includeItemsFromAllDrives", "true");
+  params.set("supportsAllDrives", "true");
+  const response = await driveServiceFetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
+    method: "GET",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error?.message || `Google Drive listing failed (${response.status}).`);
+  }
+  return Array.isArray(data.files) ? data.files : [];
+}
+
+async function driveServiceFetch(url: string, init: any = {}, retryOnAuthError = true) {
+  const accessToken = await getServiceDriveAccessToken();
+  const headers = new Headers(init.headers || {});
+  headers.set("Authorization", `Bearer ${accessToken}`);
+
+  const first = await fetch(url, {
+    ...init,
+    headers,
+  });
+
+  if (first.status !== 401 || !retryOnAuthError) {
+    return first;
+  }
+
+  gdriveServiceTokenCache = null;
+  const freshAccessToken = await getServiceDriveAccessToken(true);
+  headers.set("Authorization", `Bearer ${freshAccessToken}`);
+  return fetch(url, {
+    ...init,
+    headers,
+  });
+}
+
+async function getServiceDriveAccessToken(forceRefresh = false) {
+  if (!forceRefresh && gdriveServiceTokenCache && Date.now() < gdriveServiceTokenCache.expiresAt - 30000) {
+    return gdriveServiceTokenCache.accessToken;
+  }
+
+  const credentials = await getServiceDriveCredentials();
+  if (!credentials) {
+    throw new Error("Google Drive service account is not configured.");
+  }
+
+  const tokenUri = String(credentials.token_uri || "https://oauth2.googleapis.com/token");
+  const now = Math.floor(Date.now() / 1000);
+  const header = toBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const payload = toBase64Url(JSON.stringify({
+    iss: credentials.client_email,
+    scope: "https://www.googleapis.com/auth/drive",
+    aud: tokenUri,
+    exp: now + 3600,
+    iat: now,
+  }));
+  const input = `${header}.${payload}`;
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(input);
+  signer.end();
+  const signature = signer.sign(credentials.private_key, "base64url");
+  const assertion = `${input}.${signature}`;
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer");
+  body.set("assertion", assertion);
+
+  const response = await fetch(tokenUri, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.access_token) {
+    throw new Error(data.error_description || data.error || "Google token exchange failed.");
+  }
+
+  const expiresIn = Number(data.expires_in || 3600);
+  gdriveServiceTokenCache = {
+    accessToken: String(data.access_token),
+    expiresAt: Date.now() + expiresIn * 1000,
+  };
+  return gdriveServiceTokenCache.accessToken;
+}
+
+function toBase64Url(input: string) {
+  return Buffer.from(input).toString("base64url");
+}
+
+async function getServiceDriveCredentials() {
+  if (gdriveServiceCredentialsCache !== undefined) {
+    return gdriveServiceCredentialsCache;
+  }
+
+  const envJsonCandidates = [
+    process.env.GDRIVE_SERVICE_ACCOUNT_JSON,
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON,
+    process.env.GDRIVE_SERVICE_ACCOUNT_KEY,
+  ].filter(Boolean) as string[];
+
+  for (const rawCandidate of envJsonCandidates) {
+    const parsed = parseServiceCredentialsCandidate(rawCandidate);
+    if (parsed) {
+      gdriveServiceCredentialsCache = parsed;
+      return parsed;
+    }
+  }
+
+  const fileCandidates = [
+    process.env.GDRIVE_SERVICE_ACCOUNT_FILE,
+    process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
+    process.env.GOOGLE_APPLICATION_CREDENTIALS,
+    path.join(rootDir, "google-service-account.json"),
+  ].filter(Boolean) as string[];
+
+  for (const fileCandidate of fileCandidates) {
+    try {
+      if (!fs.existsSync(fileCandidate)) continue;
+      const raw = await fsp.readFile(fileCandidate, "utf8");
+      const parsed = parseServiceCredentialsCandidate(raw);
+      if (parsed) {
+        gdriveServiceCredentialsCache = parsed;
+        return parsed;
+      }
+    } catch {}
+  }
+
+  gdriveServiceCredentialsCache = null;
+  return null;
+}
+
+function parseServiceCredentialsCandidate(raw: string) {
+  const direct = parseJsonObject(raw);
+  if (direct) return normalizeServiceCredentials(direct);
+
+  try {
+    const decoded = Buffer.from(String(raw).trim(), "base64").toString("utf8");
+    const parsed = parseJsonObject(decoded);
+    if (parsed) return normalizeServiceCredentials(parsed);
+  } catch {}
+
+  return null;
+}
+
+function parseJsonObject(raw: string) {
+  try {
+    const parsed = JSON.parse(String(raw || "").trim());
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch {}
+  return null;
+}
+
+function normalizeServiceCredentials(value: any) {
+  const clientEmail = String(value.client_email || "").trim();
+  const privateKey = String(value.private_key || "").replace(/\\n/g, "\n").trim();
+  if (!clientEmail || !privateKey.includes("BEGIN PRIVATE KEY")) {
+    return null;
+  }
+  return {
+    client_email: clientEmail,
+    private_key: privateKey,
+    token_uri: String(value.token_uri || "https://oauth2.googleapis.com/token").trim(),
+  };
+}
+
+function sanitizeDriveId(value: any) {
+  const raw = String(value || "").trim();
+  if (!raw) return "root";
+  if (raw === "root") return raw;
+  if (/^[A-Za-z0-9_-]+$/.test(raw)) return raw;
+  return "root";
+}
+
+function escapeDriveQuery(value: string) {
+  return String(value || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+async function handleOpenGoogleDriveBrowser() {
+  const targetUrl = `http://localhost:${port}/?browserAuth=1&authRun=${Date.now()}#google-drive`;
+  await openExternalUrl(targetUrl);
+  return { ok: true, url: targetUrl };
+}
+
+async function handleOpenUrlRequest(request: any) {
+  const body = await readJsonRequest(request);
+  const rawUrl = String(body?.url || "").trim();
+  if (!rawUrl) {
+    throw new Error("Missing url.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid url.");
+  }
+
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("Only http(s) urls are allowed.");
+  }
+
+  // Basic guardrail: only allow opening common publishing domains.
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  const allowedHosts = new Set([
+    "tiktok.com",
+    "accounts.google.com",
+    "drive.google.com",
+    "docs.google.com",
+    "vizard.ai",
+  ]);
+  const isAllowed = [...allowedHosts].some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+  if (!isAllowed) {
+    throw new Error(`Blocked host "${host}".`);
+  }
+
+  await openExternalUrl(parsed.toString());
+  return { ok: true, url: parsed.toString() };
+}
+
+async function handleDownloadRequest(url: URL, request: any, response: any) {
+  const rawUrl = String(url.searchParams.get("url") || "").trim();
+  const rawName = String(url.searchParams.get("name") || "clip.mp4").trim();
+  if (!rawUrl) {
+    response.writeHead(400);
+    response.end("Missing url");
+    return;
+  }
+
+  const sanitizedName = safeFilename(rawName);
+
+  let target: URL;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    response.writeHead(400);
+    response.end("Invalid url");
+    return;
+  }
+
+  if (!["http:", "https:"].includes(target.protocol)) {
+    response.writeHead(400);
+    response.end("Only http(s) urls are allowed");
+    return;
+  }
+
+  const host = target.hostname.toLowerCase().replace(/^www\./, "");
+  const allowedHosts = [
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "vizard.ai",
+    "amazonaws.com",
+    "googleapis.com",
+    "googleusercontent.com",
+  ];
+  const isAllowed = allowedHosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+  if (!isAllowed) {
+    response.writeHead(403);
+    response.end("Forbidden");
+    return;
+  }
+
+  let upstream: any;
+  try {
+    const fetchHeaders: any = {};
+    if (request.headers.range) {
+      fetchHeaders["Range"] = request.headers.range;
+    }
+    upstream = await fetch(target.toString(), { headers: fetchHeaders });
+  } catch {
+    response.writeHead(502);
+    response.end("Upstream fetch failed");
+    return;
+  }
+
+  if (!upstream.ok) {
+    const msg = await upstream.text().catch(() => "");
+    response.writeHead(upstream.status || 502, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end(msg || "Upstream returned error");
+    return;
+  }
+
+  const headers: any = {
+    "Content-Type": upstream.headers.get("Content-Type") || "application/octet-stream",
+    "Cache-Control": "no-store",
+    "Content-Disposition": `attachment; filename=\"${sanitizedName}\"`,
+  };
+  const contentLength = upstream.headers.get("Content-Length");
+  if (contentLength) headers["Content-Length"] = contentLength;
+  const contentRange = upstream.headers.get("Content-Range");
+  if (contentRange) headers["Content-Range"] = contentRange;
+
+  response.writeHead(upstream.status || 200, headers);
+
+  if (request.method === "GET" && upstream.body) {
+    if (typeof (upstream.body as any).getReader === "function") {
+      const reader = (upstream.body as any).getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        response.write(value);
+      }
+    } else if (typeof (upstream.body as any).pipe === "function") {
+      (upstream.body as any).pipe(response);
+      await new Promise((resolve) => {
+        response.on("finish", resolve);
+        response.on("close", resolve);
+      });
+    } else if (typeof Symbol.asyncIterator !== "undefined" && (upstream.body as any)[Symbol.asyncIterator]) {
+      for await (const chunk of (upstream.body as any)) {
+        response.write(chunk);
+      }
+    }
+  }
+
+  response.end();
+}
+
+async function buildGoogleDriveAuthUrl() {
+  const redirectUri = `http://localhost:${port}/?externalAuth=1`;
+  const clientId = await getGoogleOAuthClientId(redirectUri);
+  const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  authUrl.searchParams.set("client_id", clientId);
+  authUrl.searchParams.set("redirect_uri", redirectUri);
+  authUrl.searchParams.set("response_type", "token");
+  authUrl.searchParams.set("scope", [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+  ].join(" "));
+  authUrl.searchParams.set("include_granted_scopes", "true");
+  authUrl.searchParams.set("prompt", "select_account");
+  authUrl.searchParams.set("state", "clipflow-google-drive");
+  return authUrl.toString();
+}
+
+async function getGoogleOAuthClientId(continueUri: string) {
+  if (googleOAuthClientId) return googleOAuthClientId;
+
+  const configPath = path.join(rootDir, "firebase-applet-config.json");
+  const firebaseConfig = JSON.parse(await fsp.readFile(configPath, "utf8"));
+  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      providerId: "google.com",
+      continueUri,
+      customParameter: { prompt: "select_account" },
+      oauthScope: "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok || !data.authUri) {
+    throw new Error(data.error?.message || "Could not create Google sign-in link.");
+  }
+
+  const authUri = new URL(data.authUri);
+  googleOAuthClientId = authUri.searchParams.get("client_id");
+  if (!googleOAuthClientId) {
+    throw new Error("Google sign-in link did not include a client ID.");
+  }
+  return googleOAuthClientId;
+}
+
+function openExternalUrl(targetUrl: string) {
+  if (process.platform === "darwin") {
+    return spawnDetached("open", ["-a", "Safari", targetUrl]).catch(() => spawnDetached("open", [targetUrl]));
+  }
+
+  const opener = process.platform === "win32"
+    ? { command: "cmd", args: ["/c", "start", "", targetUrl] }
+    : { command: "xdg-open", args: [targetUrl] };
+  return spawnDetached(opener.command, opener.args);
+}
+
+function spawnDetached(command: string, args: string[]) {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+async function getGeminiClient() {
+  if (!geminiApiKey) return null;
+  if (ai || geminiClientLoadAttempted) return ai;
+  geminiClientLoadAttempted = true;
+
+  try {
+    const { GoogleGenAI } = await import("@google/genai");
+    ai = new GoogleGenAI({
+      apiKey: geminiApiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+  } catch (error: any) {
+    console.warn(`Gemini SDK is unavailable, using other analysis options: ${error.message}`);
+  }
+
+  return ai;
 }
 
 async function handleClipRequest(request: any, url: any) {

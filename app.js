@@ -1776,15 +1776,28 @@ async function publishJob(job) {
   }
 
   if (job.provider === "direct" && job.directMode === "assistant") {
-    // 1. Copy caption text to clipboard automatically
+    // Open TikTok in the system browser (Comet on macOS) via the backend helper.
+    // This avoids popup blockers and works even if ClipFlow is running in an embedded browser.
     try {
-      await navigator.clipboard.writeText(job.post);
-    } catch (clipErr) {
-      console.warn("Unable to write caption to clipboard:", clipErr);
-    }
+      fetch(apiUrl("/api/open-url"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: "https://www.tiktok.com/upload" }),
+      }).catch(() => {});
+    } catch {}
 
-    // 2. Open TikTok creator upload page in a new window immediately
-    const popupSuccess = window.open("https://www.tiktok.com/upload", "_blank");
+    const copyCaptionNow = async () => {
+      try {
+        await navigator.clipboard.writeText(job.post || "");
+        return true;
+      } catch (clipErr) {
+        console.warn("Unable to write caption to clipboard:", clipErr);
+        return false;
+      }
+    };
+
+    // Best-effort automatic copy (may fail in embedded browsers; we also provide a button).
+    copyCaptionNow().catch(() => {});
 
     // 3. Initiate programmatic anchor click download for the video clip
     try {
@@ -1853,7 +1866,13 @@ async function publishJob(job) {
           </div>
         </div>
 
-        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <div style="display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;">
+          <button id="copyCaptionBtn" style="background: transparent; border: 1px solid rgba(37,244,241,0.5); color: #25f4f1; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 700;">
+            Copy caption
+          </button>
+          <button id="downloadClipBtn" style="background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #fff; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600;">
+            Download video
+          </button>
           <button id="closeSmartAssistant" style="background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #fff; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 500;">
             Close Assistant
           </button>
@@ -1864,6 +1883,24 @@ async function publishJob(job) {
       </div>
     `;
 
+    const downloadUrl = apiUrl(`/api/download?url=${encodeURIComponent(finalVideoUrl)}&name=${encodeURIComponent((job.title || "clip").slice(0, 80) + ".mp4")}`);
+
+    modal.querySelector("#copyCaptionBtn").addEventListener("click", async () => {
+      const ok = await copyCaptionNow();
+      if (!ok) setClipStatus("Clipboard copy blocked by browser. Copy manually from the modal text.", "error");
+    });
+
+    modal.querySelector("#downloadClipBtn").addEventListener("click", () => {
+      // Open the download link in Safari via backend helper so it saves reliably.
+      try {
+        fetch(apiUrl("/api/open-url"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: `${window.location.origin}${downloadUrl}` }),
+        }).catch(() => {});
+      } catch {}
+    });
+
     document.body.appendChild(modal);
 
     modal.querySelector("#closeSmartAssistant").addEventListener("click", () => {
@@ -1871,7 +1908,13 @@ async function publishJob(job) {
     });
 
     modal.querySelector("#reopenTikTokTab").addEventListener("click", () => {
-      window.open("https://www.tiktok.com/upload", "_blank");
+      try {
+        fetch(apiUrl("/api/open-url"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: "https://www.tiktok.com/upload" }),
+        }).catch(() => {});
+      } catch {}
     });
 
     return;
