@@ -31,20 +31,16 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 10a4 4 0 1 1 8 0 4 4 0 0 1-8 0Zm-3 9a7 7 0 0 1 14 0v1H5v-1Z"></path></svg>
             Accounts
           </a>
-	          <a class="nav-item" href="#vizard-library">
-	            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v4H4V5Zm0 6h7v8H4v-8Zm9 0h7v8h-7v-8Z"></path></svg>
-	            Videos
-	          </a>
-	          <a class="nav-item" href="#retrieval">
-	            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 18a8 8 0 1 1 5.293-14.707A8 8 0 0 1 10 18Zm11 3-5.2-5.2 1.4-1.4L22.4 19.6 21 21Z"></path></svg>
-	            Retrieval
-	          </a>
-	          <a class="nav-item" href="#google-drive">
-	            <svg viewBox="0 0 24 24" aria-hidden="true">
-	              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
-	            </svg>
-	            Google Drive
-	          </a>
+          <a class="nav-item" href="#vizard-library">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v4H4V5Zm0 6h7v8H4v-8Zm9 0h7v8h-7v-8Z"></path></svg>
+            Videos
+          </a>
+          <a class="nav-item" href="#google-drive">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+            </svg>
+            Google Drive
+          </a>
           <a class="nav-item" href="#queue">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v3H5V5Zm0 5h14v3H5v-3Zm0 5h10v3H5v-3Z"></path></svg>
             Queue
@@ -52,6 +48,18 @@
           <a class="nav-item" href="#publish">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
             Publish
+          </a>
+          <a class="nav-item" href="#optimization">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM13 3.5L18.5 9H13zM9 11h6v2H9zm0 4h4v2H9z"/></svg>
+            Optimization
+          </a>
+          <a class="nav-item" id="sidebarLinkAnalytics" href="#analytics" style="display: none;">
+            <svg viewBox="0 0 24 24" aria-hidden="true" style="stroke: currentColor; fill: none; stroke-width: 2;"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+            Analytics
+          </a>
+          <a class="nav-item" id="sidebarLinkSettings" href="#settings" style="display: none;">
+            <svg viewBox="0 0 24 24" aria-hidden="true" style="stroke: currentColor; fill: none; stroke-width: 2;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Settings
           </a>
         </nav>
 
@@ -159,6 +167,8 @@
               <label><input id="verticalCrop" type="checkbox" checked> 9:16 crop</label>
             </div>
 
+            <div id="aiScriptboardContainer" style="display: none; border: 1.5px dashed rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.04); border-radius: 8px; padding: 12px; margin: 12px 0; flex-direction: column; gap: 8px;"></div>
+
             <button class="primary-button" data-testid="generate-clips" type="submit">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 1.5 5.1L19 8.6l-5.5 1.5L12 15l-1.5-4.9L5 8.6l5.5-1.5L12 2Zm6 12 1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3ZM5 14l.8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14Z"></path></svg>
               Generate clip set
@@ -197,67 +207,21 @@
           </section>
         </section>
 
-	        <section class="library-section panel" id="vizard-library" style="display: none; flex-direction: column; gap: 14px; min-width: 0;">
-	          <div class="panel-heading" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 4px; flex-wrap: wrap; gap: 12px;">
-	            <div>
-	              <p class="eyebrow">Vizard workspace library</p>
-	              <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;">Videos Tab</h2>
-	            </div>
-	            <div style="display: flex; gap: 8px; align-items: center;">
-	              <a class="mini-button" href="https://vizard.ai/projects" target="_blank" rel="noreferrer" style="font-size: 0.75rem; text-decoration: none; padding: 4px 8px;">Workspace Projects ↗</a>
-	              <button class="secondary-button" id="refreshVizardLibrary" type="button" style="height: 32px; padding: 0 10px; font-size: 0.75rem; font-weight: 500;">
-	                Refresh
-	              </button>
-	            </div>
-	          </div>
-
-	          <div style="background: rgba(30, 41, 59, 0.25); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 12px;">
-	            <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
-	              <div style="display: flex; flex-direction: column; gap: 2px;">
-	                <div style="font-weight: 800; color: var(--ink);">Retrieve videos</div>
-	                <div style="font-size: 0.82rem; color: var(--muted); line-height: 1.35;">Paste a Vizard Project ID to bring old clips back into ClipFlow.</div>
-	              </div>
-	              <div class="segmented-control" id="vizardImportMode" aria-label="Vizard import mode" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
-	                <button class="active" type="button" data-mode="api">Retrieval</button>
-	                <button type="button" data-mode="link">Direct link</button>
-	              </div>
-	            </div>
-
-	            <form id="vizardProjectForm" style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end;">
-	              <label class="field" style="margin: 0;">
-	                <span>Vizard Project ID or URL</span>
-	                <input id="vizardProjectInput" type="text" inputmode="numeric" placeholder="e.g. 12345678" autocomplete="off">
-	              </label>
-	              <button class="primary-button" type="submit" style="height: 42px; padding: 0 14px; margin: 0; background: #6366f1; border: none; color: white; font-weight: 800;">
-	                Retrieve
-	              </button>
-	            </form>
-
-	            <form id="vizardDirectLinkForm" style="display: none; flex-direction: column; gap: 10px;">
-	              <div class="settings-grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
-	                <label class="field" style="margin: 0;">
-	                  <span>Title</span>
-	                  <input id="vizardDirectTitle" type="text" placeholder="My clip title" autocomplete="off">
-	                </label>
-	                <label class="field" style="margin: 0;">
-	                  <span>Video URL</span>
-	                  <input id="vizardDirectUrl" type="url" placeholder="https://..." autocomplete="off">
-	                </label>
-	              </div>
-	              <label class="field" style="margin: 0;">
-	                <span>Caption (optional)</span>
-	                <input id="vizardDirectCaption" type="text" placeholder="#hashtags ..." autocomplete="off">
-	              </label>
-	              <div style="display: flex; justify-content: flex-end;">
-	                <button class="secondary-button" type="submit" style="height: 42px; padding: 0 14px; margin: 0;">
-	                  Add to desk
-	                </button>
-	              </div>
-	            </form>
-	          </div>
-
-	          <div class="library-list" id="vizardLibrary"></div>
-	        </section>
+        <section class="library-section panel" id="vizard-library" style="display: none; flex-direction: column; gap: 14px; min-width: 0;">
+          <div class="panel-heading" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 4px; flex-wrap: wrap; gap: 12px;">
+            <div>
+              <p class="eyebrow">Vizard workspace library</p>
+              <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;">Videos Tab</h2>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <a class="mini-button" href="https://vizard.ai/projects" target="_blank" rel="noreferrer" style="font-size: 0.75rem; text-decoration: none; padding: 4px 8px;">Workspace Projects ↗</a>
+              <button class="secondary-button" id="refreshVizardLibrary" type="button" style="height: 32px; padding: 0 10px; font-size: 0.75rem; font-weight: 500;">
+                Refresh
+              </button>
+            </div>
+          </div>
+          <div class="library-list" id="vizardLibrary"></div>
+        </section>
 
         <section class="accounts-section panel" id="accounts">
           <div class="panel-heading">
@@ -317,6 +281,8 @@
               </div>
             </div>
           </div>
+
+          <div id="multiVaultContainer" style="display: none; border: 1px dashed rgba(37, 244, 241, 0.4); background: rgba(37, 244, 241, 0.03); padding: 12px; border-radius: var(--radius); margin-bottom: 12px; font-size: 13px; flex-direction: column; gap: 8px;"></div>
 
           <div class="account-list" id="accountList"></div>
         </section>
@@ -406,6 +372,190 @@
 
           <div id="publishListContainer" style="display: flex; flex-direction: column; gap: 16px;">
             <!-- Selected clips custom config cards will render here dynamically via JavaScript -->
+          </div>
+        </section>
+
+        <!-- Optimization workspace section -->
+        <section class="panel" id="optimization" style="display: none; flex-direction: column; gap: 16px; min-width: 0;">
+          <div class="panel-heading" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 14px; margin-bottom: 2px; flex-wrap: wrap; gap: 12px;">
+            <div>
+              <p class="eyebrow">Smart System Assistant</p>
+              <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;">Optimizations & Enhancements</h2>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="primary-button animate-subtle" id="runAuditBtn" type="button" style="height: 32px; padding: 0 12px; font-size: 0.8rem; background: #6366f1; border: none; color: white; font-weight: bold; display: flex; align-items: center; gap: 6px;">
+                <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor; margin-right: 2px;"><path d="m12 2 1.5 5.1L19 8.6l-5.5 1.5L12 15l-1.5-4.9L5 8.6l5.5-1.5L12 2Zm6 12 1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3ZM5 14l.8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14Z"></path></svg>
+                Scan Workspace
+              </button>
+            </div>
+          </div>
+
+          <!-- Optimization Tabs Nav -->
+          <div style="display: flex; border-bottom: 1px solid var(--line); gap: 8px; padding-bottom: 1px; margin-bottom: 4px; flex-wrap: wrap;">
+            <button type="button" class="opt-tab-btn" id="optTabContent" style="background: none; border: none; padding: 8px 16px; font-size: 0.9rem; font-weight: 600; color: #818cf8; border-bottom: 2px solid #6366f1; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;">
+              <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              <span>Content Creation</span>
+            </button>
+            <button type="button" class="opt-tab-btn" id="optTabClipflow" style="background: none; border: none; padding: 8px 16px; font-size: 0.9rem; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;">
+              <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+              <span>ClipFlow Configurations</span>
+            </button>
+            <button type="button" class="opt-tab-btn" id="optTabFeatures" style="background: none; border: none; padding: 8px 16px; font-size: 0.9rem; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;">
+              <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              <span>App Features</span>
+            </button>
+          </div>
+
+          <div id="optimizationIntroText" style="background: rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px; padding: 12px 16px; font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 10px;">
+            <svg viewBox="0 0 24 24" style="width: 20px; height: 20px; fill: currentColor; color: #818cf8; flex-shrink: 0;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+            <span id="optimizationIntroSpan">Review and **Approve** modular enhancers proposed by our Smart Assistant to optimize your creation workflow and application capabilities. Approved features activate instantly.</span>
+          </div>
+
+          <div id="optimizationListContainer" style="display: flex; flex-direction: column; gap: 16px;">
+            <!-- Render optimizations here via JavaScript -->
+          </div>
+        </section>
+
+        <!-- Analytics Dashboard section -->
+        <section class="panel" id="analytics" style="display: none; flex-direction: column; gap: 16px; min-width: 0;">
+          <div class="panel-heading" style="border-bottom: 1px solid var(--line); padding-bottom: 14px; margin-bottom: 4px;">
+            <div>
+              <p class="eyebrow">Smart System Assistant</p>
+              <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;">Analytics Dashboard</h2>
+            </div>
+          </div>
+          
+          <!-- Key metrics grid -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; width: 100%;">
+            <div style="background: var(--panel-strong); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 6px;">
+              <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--muted); font-weight: 600;">Total Videos Rendered</span>
+              <strong id="analyticsTotalClips" style="font-size: 2rem; color: var(--ink); font-family: var(--font-mono);">6</strong>
+              <span style="font-size: 0.7rem; color: #34d399;">⚡ Fully Hardware Accelerated</span>
+            </div>
+            <div style="background: var(--panel-strong); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 6px;">
+              <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--muted); font-weight: 600;">Estimated Virality Reach</span>
+              <strong id="analyticsEstReach" style="font-size: 2rem; color: #a78bfa; font-family: var(--font-mono);">485K</strong>
+              <span style="font-size: 0.7rem; color: var(--muted);">Based on cumulative Virality Index scores</span>
+            </div>
+            <div style="background: var(--panel-strong); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 6px;">
+              <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--muted); font-weight: 600;">Average Clip Score</span>
+              <strong id="analyticsAvgScore" style="font-size: 2rem; color: #60a5fa; font-family: var(--font-mono);">88%</strong>
+              <span style="font-size: 0.7rem; color: #60a5fa;">🎯 Optimal conversion bracket</span>
+            </div>
+          </div>
+
+          <!-- Charts and breakdown workspace -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; width: 100%;">
+            <div style="background: var(--panel-strong); border: 1px solid var(--line); border-radius: 8px; padding: 16px;">
+              <h3 style="font-size: 0.95rem; font-weight: 700; margin-bottom: 12px; color: var(--ink);">Target Audience Platform Shares</h3>
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                <div>
+                  <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px;">
+                    <span>TikTok Feed (9:16)</span>
+                    <span style="font-weight: bold; color: #ff0050;">55%</span>
+                  </div>
+                  <div style="height: 6px; background: rgba(255, 255, 255, 0.05); border-radius: 3px; overflow: hidden;">
+                    <div style="width: 55%; height: 100%; background: #ff0050;"></div>
+                  </div>
+                </div>
+                <div>
+                  <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px;">
+                    <span>Instagram Reels</span>
+                    <span style="font-weight: bold; color: #e1306c;">30%</span>
+                  </div>
+                  <div style="height: 6px; background: rgba(255, 255, 255, 0.05); border-radius: 3px; overflow: hidden;">
+                    <div style="width: 30%; height: 100%; background: #e1306c;"></div>
+                  </div>
+                </div>
+                <div>
+                  <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px;">
+                    <span>YouTube Shorts</span>
+                    <span style="font-weight: bold; color: #ff0000;">15%</span>
+                  </div>
+                  <div style="height: 6px; background: rgba(255, 255, 255, 0.05); border-radius: 3px; overflow: hidden;">
+                    <div style="width: 15%; height: 100%; background: #ff0000;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style="background: var(--panel-strong); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; justify-content: space-between;">
+              <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--ink);">Workspace Growth Projection</h3>
+              <div style="display: flex; align-items: flex-end; justify-content: space-between; height: 80px; padding: 4px 10px 0;">
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;"><div style="width: 24px; height: 18px; background: rgba(99, 102, 241, 0.3); border-radius: 3px 3px 0 0;"></div><span style="font-size: 0.6rem; color: var(--muted);">Wk 1</span></div>
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;"><div style="width: 24px; height: 35px; background: rgba(99, 102, 241, 0.5); border-radius: 3px 3px 0 0;"></div><span style="font-size: 0.6rem; color: var(--muted);">Wk 2</span></div>
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;"><div style="width: 24px; height: 50px; background: rgba(99, 102, 241, 0.7); border-radius: 3px 3px 0 0;"></div><span style="font-size: 0.6rem; color: var(--muted);">Wk 3</span></div>
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;"><div style="width: 24px; height: 75px; background: #6366f1; border-radius: 3px 3px 0 0; box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);"></div><span style="font-size: 0.6rem; color: var(--ink); font-weight: bold;">Present</span></div>
+              </div>
+              <p style="font-size: 0.725rem; color: var(--muted); margin: 8px 0 0 0; line-height: 1.35;">Audience traction estimate is currently trending upwards due to constant prime-time dispatch alignment!</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Settings section -->
+        <section class="panel" id="settings" style="display: none; flex-direction: column; gap: 16px; min-width: 0;">
+          <div class="panel-heading" style="border-bottom: 1px solid var(--line); padding-bottom: 14px; margin-bottom: 4px;">
+            <div>
+              <p class="eyebrow">Smart System Assistant</p>
+              <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;">Application Settings</h2>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; width: 100%;">
+            <!-- Export preferences form -->
+            <div style="background: var(--panel-strong); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+              <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--ink); margin-bottom: 4px; border-bottom: 1px dashed var(--line); padding-bottom: 6px;">Rendering & Exports</h3>
+              
+              <label class="field" style="margin: 0;">
+                <span>Default Export Resolution</span>
+                <select id="settingsRes" style="width: 100%;">
+                  <option value="1080">1080p Full HD (Recommended)</option>
+                  <option value="720">720p HD Ready</option>
+                  <option value="4k">4K Ultra HD (High Bitrate)</option>
+                </select>
+              </label>
+
+              <label class="field" style="margin: 0;">
+                <span>Default Video Framerate</span>
+                <select id="settingsFPS" style="width: 100%;">
+                  <option value="60">60 FPS Smooth (Requires Hardware Acceleration)</option>
+                  <option value="30">30 FPS Standard</option>
+                </select>
+              </label>
+
+              <label class="field" style="margin: 0;">
+                <span>Video Watermark Text</span>
+                <input id="settingsWatermark" type="text" value="ClipFlow Studio" placeholder="None" style="width: 100%;">
+              </label>
+            </div>
+
+            <!-- Credentials switches & backups -->
+            <div style="background: var(--panel-strong); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+              <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--ink); margin-bottom: 4px; border-bottom: 1px dashed var(--line); padding-bottom: 6px;">API & Backup Channels</h3>
+
+              <div>
+                <span class="eyebrow" style="margin-bottom: 2px; display: block;">Vizard API Auto Processing</span>
+                <p style="font-size: 0.725rem; color: var(--muted); margin: 0 0 4px 0;">Auto-submit new workspace clips to Vizard engine for multi-crop extraction on ingestion.</p>
+                <label style="font-size: 0.8rem; display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ink);">
+                  <input type="checkbox" id="settingsAutoVizard" checked style="width: 14px; height: 14px;"> Enable background extraction
+                </label>
+              </div>
+
+              <div>
+                <span class="eyebrow" style="margin-bottom: 2px; display: block;">System Storage & Cache Index</span>
+                <p style="font-size: 0.725rem; color: var(--muted); margin: 0 0 6px 0;">Clean up local IndexedDB buffer cache to free memory allocation.</p>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--muted);" id="settingsCacheSize">150.3 MB</span>
+                  <button type="button" class="mini-button" id="settingsClearCacheBtn">Clear Cache</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 8px;">
+            <button class="primary-button" id="settingsSaveBtn" type="button" style="background: #10b981; border: none; font-weight: bold; color: white;">
+              Save Preferences
+            </button>
           </div>
         </section>
       </main>

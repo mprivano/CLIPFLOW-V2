@@ -1146,3 +1146,32 @@ svg {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* --- OPTIMIZATION SECTION HOVER INTERACTIONS --- */
+.optimization-card {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+}
+
+.optimization-card:hover {
+  transform: translateY(-2px);
+  border-color: #6366f1 !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+}
+
+.opt-approve-btn {
+  transition: background-color 0.15s ease, transform 0.1s ease;
+}
+
+.opt-approve-btn:active {
+  transform: scale(0.96);
+}
+
+.opt-dismiss-btn {
+  transition: all 0.15s ease;
+}
+
+.opt-dismiss-btn:hover {
+  background: rgba(239, 68, 68, 0.1) !important;
+  color: #ef4444 !important;
+  border-color: rgba(239, 68, 68, 0.2) !important;
+}
