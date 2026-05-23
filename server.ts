@@ -2,25 +2,22 @@ import http from "node:http";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { GoogleGenAI, Type } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const geminiApiKey = process.env.GEMINI_API_KEY || "";
-let ai: GoogleGenAI | null = null;
-if (geminiApiKey) {
-  ai = new GoogleGenAI({
-    apiKey: geminiApiKey,
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build",
-      },
-    },
-  });
-}
+let ai: any = null;
+let geminiClientLoadAttempted = false;
+const Type = {
+  ARRAY: "ARRAY",
+  NUMBER: "NUMBER",
+  OBJECT: "OBJECT",
+  STRING: "STRING",
+};
 
 const rootDir = __dirname;
 const mediaDir = path.join(rootDir, "media");
@@ -196,6 +193,12 @@ async function start() {
 
       if (url.pathname === "/api/telegram/publish" && request.method === "POST") {
         const result = await handleTelegramPublishRequest(request);
+        sendJson(response, result);
+        return;
+      }
+
+      if (url.pathname === "/api/telegram/validate" && request.method === "POST") {
+        const result = await handleTelegramValidateRequest(request);
         sendJson(response, result);
         return;
       }
@@ -1710,8 +1713,27 @@ async function handleTelegramPublishRequest(request: any) {
 
     const tgData: any = await tgRes.json().catch(() => ({}));
     if (!tgRes.ok || !tgData.ok) {
-      const description = tgData.description || tgRes.statusText;
-      throw new Error(`Telegram error description: "${description}"`);
+      const description = String(tgData.description || tgRes.statusText || "Unknown error");
+      const descriptionLower = description.toLowerCase();
+
+      // Make common Telegram failures actionable for non-technical users.
+      if (descriptionLower === "not found") {
+        throw new Error(
+          'Telegram error: Invalid bot token. Revoke/regenerate the token in @BotFather and update it in Accounts.',
+        );
+      }
+      if (descriptionLower.includes("chat not found") || descriptionLower.includes("chat_id is empty")) {
+        throw new Error(
+          "Telegram error: Chat ID is wrong or the bot cannot access that chat. Send the bot a message first, then use the numeric chat id.",
+        );
+      }
+      if (descriptionLower.includes("forbidden") || descriptionLower.includes("blocked")) {
+        throw new Error(
+          "Telegram error: Bot is blocked or lacks permission in that chat. Unblock it or add it to the group/channel with permission.",
+        );
+      }
+
+      throw new Error(`Telegram error: ${description}`);
     }
 
     console.log(`Telegram Bot - Dispatch delivered successfully! Message ID: ${tgData.result?.message_id}`);
@@ -1725,6 +1747,26 @@ async function handleTelegramPublishRequest(request: any) {
     console.error("Telegram Bot API send error:", apiErr);
     throw new Error(`Telegram server delivery rejected: ${apiErr.message || apiErr}`);
   }
+}
+
+async function handleTelegramValidateRequest(request: any) {
+  const body = await readJsonRequest(request);
+  const telegramBotToken = String(body.telegramBotToken || "").trim();
+  if (!telegramBotToken) {
+    throw new Error("Telegram bot token is required.");
+  }
+
+  const res = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`, { method: "GET" });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) {
+    const description = data.description || res.statusText || "Unknown error";
+    throw new Error(`Telegram token validation failed: "${description}"`);
+  }
+
+  return {
+    ok: true,
+    bot: data.result || null,
+  };
 }
 
 async function getVideoBuffer(videoUrl: string): Promise<Buffer> {

@@ -10,6 +10,8 @@ let gdriveFiles = [];
 let gdriveFolders = [];
 let isGDriveLoading = false;
 let gdriveError = null;
+let gdriveServiceStatus = null;
+let gdriveServiceStatusChecked = false;
 let systemVizardConfigured = false;
 const liveUploadingClipIds = new Set();
 const destinationPlatforms = ["TikTok", "Instagram", "YouTube Shorts"];
@@ -413,6 +415,7 @@ elements.accountList.addEventListener("click", (event) => {
   if (!action) return;
 
   if (action.dataset.accountAction === "remove-direct") {
+    if (!confirm("Remove this Direct account?")) return;
     state.accounts = state.accounts.filter(item => item.id !== action.dataset.accountId);
     saveAndRender();
     setClipStatus("Direct account removed successfully.", "ready");
@@ -420,6 +423,7 @@ elements.accountList.addEventListener("click", (event) => {
   }
 
   if (action.dataset.accountAction === "remove-telegram") {
+    if (!confirm("Remove this Telegram bot account?")) return;
     state.accounts = state.accounts.filter(item => item.id !== action.dataset.accountId);
     saveAndRender();
     setClipStatus("Telegram bot removed successfully.", "ready");
@@ -533,7 +537,7 @@ if (elements.cancelTelegram && elements.telegramForm) {
 }
 
 if (elements.saveTelegram && elements.telegramForm) {
-  elements.saveTelegram.addEventListener("click", () => {
+  elements.saveTelegram.addEventListener("click", async () => {
     const botToken = elements.telegramBotToken.value.trim();
     const chatId = elements.telegramChatId.value.trim();
     let handle = elements.telegramHandle.value.trim();
@@ -545,6 +549,22 @@ if (elements.saveTelegram && elements.telegramForm) {
 
     if (!handle) {
       handle = "@telegram_bot";
+    }
+
+    // Validate bot token early so publishing doesn't fail later with a vague "Not Found".
+    try {
+      const res = await fetch(apiUrl("/api/telegram/validate"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ telegramBotToken: botToken }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "Telegram token validation failed.");
+      }
+    } catch (err) {
+      setClipStatus(err.message || "Telegram token validation failed.", "error");
+      return;
     }
 
     const newAccount = {
@@ -2852,9 +2872,17 @@ async function getOrFetchGDriveMetadata(fileId) {
 }
 
 async function fetchGDriveFiles() {
-  if (!cachedAccessToken) {
-    throw new Error("No active Google Drive access token. Please sign in.");
+  if (isServiceDriveMode()) {
+    const folderId = (state.preferences && state.preferences.gdriveFolderId) || "root";
+    const res = await fetch(apiUrl(`/api/drive/files?folderId=${encodeURIComponent(folderId)}`));
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Failed to scan Google Drive.");
+    }
+    return data.files || [];
   }
+
+  if (!cachedAccessToken) throw new Error("No active Google Drive access token. Please sign in.");
   try {
     const parentId = (state.preferences && state.preferences.gdriveFolderId) || "root";
     
@@ -2968,6 +2996,13 @@ async function fetchGDriveFiles() {
 }
 
 async function fetchGDriveFolders() {
+  if (isServiceDriveMode()) {
+    const res = await fetch(apiUrl("/api/drive/folders?parentId=root"));
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) return [];
+    return data.folders || [];
+  }
+
   if (!cachedAccessToken) return [];
   try {
     const q = "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
@@ -2994,9 +3029,23 @@ async function fetchGDriveFolders() {
 }
 
 async function createGDriveFolder(folderName) {
-  if (!cachedAccessToken) {
-    throw new Error("Log in required to create folders.");
+  if (isServiceDriveMode()) {
+    const parentId = (state.preferences && state.preferences.gdriveFolderId) || "root";
+    const res = await fetch(apiUrl("/api/drive/folders"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ name: folderName, parentId })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Failed to create folder.");
+    }
+    return { id: data.id, name: data.name || folderName };
   }
+
+  if (!cachedAccessToken) throw new Error("Log in required to create folders.");
   if (!folderName.trim()) {
     throw new Error("Folder name cannot be empty.");
   }
@@ -3031,9 +3080,10 @@ async function createGDriveFolder(folderName) {
 
 async function renderGDrive() {
   if (!elements.gdriveContainer) return;
+  await loadGDriveServiceStatus();
 
   // Toggle visibility of panel heading actions
-  if (googleUser && cachedAccessToken) {
+  if ((googleUser && cachedAccessToken) || isServiceDriveMode()) {
     if (elements.refreshGDrive) elements.refreshGDrive.style.display = "inline-flex";
     if (elements.gdriveLogout) elements.gdriveLogout.style.display = "inline-flex";
   } else {
@@ -3042,7 +3092,7 @@ async function renderGDrive() {
   }
 
   // If no auth, show standard Sign-In screen
-  if (!googleUser || !cachedAccessToken) {
+  if (!isServiceDriveMode() && (!googleUser || !cachedAccessToken)) {
     elements.gdriveContainer.innerHTML = `
       <div class="empty-state" style="padding: 40px 16px; text-align: center;">
         <div aria-hidden="true" style="margin-bottom: 16px; font-size: 3rem;">📂</div>
@@ -3086,9 +3136,13 @@ async function renderGDrive() {
   const currentFolderId = state.preferences.gdriveFolderId || "root";
 
   // Generate top layout header for logged-in UI
+  const connectedLabel = isServiceDriveMode()
+    ? `Connected: <strong>${escapeHtml(gdriveServiceStatus.displayName || "Workspace Drive")}</strong>`
+    : `Connected: <strong>${escapeHtml(googleUser.displayName || googleUser.email)}</strong>`;
+
   const headerHTML = `
     <div style="margin-bottom: 14px; font-size: 0.85rem; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-      <span>Connected: <strong>${escapeHtml(googleUser.displayName || googleUser.email)}</strong></span>
+      <span>${connectedLabel}</span>
       <span>Total listed documents: <strong style="color: var(--ink);">${gdriveFiles.length} MP4s</strong></span>
     </div>
 
@@ -3110,7 +3164,7 @@ async function renderGDrive() {
           <select id="gdriveFolderSelect" style="background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 0.82rem; height: 35px; width: 100%; outline: none; cursor: pointer;">
             <option value="root" ${currentFolderId === "root" ? "selected" : ""}>📁 Entire Drive (Root)</option>
             ${gdriveFolders.map(folder => `
-              <option value="${escapeHtml(folder.id)}" ${currentFolderId === folder.id ? "selected" : ""}>📁 ${escapeHtml(folder.name)}</option>
+              <option value="${escapeHtml(folder.id)}" ${currentFolderId === folder.id ? "selected" : ""}>📁 ${escapeHtml(folder.name)}${folder.sharedWithMe ? " (Shared)" : ""}</option>
             `).join('')}
           </select>
         </div>
@@ -3181,7 +3235,9 @@ async function renderGDrive() {
     innerHTML = `
       <div class="library-video-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
         ${gdriveFiles.map((file) => {
-          const proxyUrl = `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
+          const proxyUrl = isServiceDriveMode()
+            ? `/api/drive/file/${encodeURIComponent(file.id)}`
+            : `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
           const dateStr = formatProjectDate(file.modifiedTime);
           const sizeCalculated = file.size ? `${(parseInt(file.size) / (1024 * 1024)).toFixed(1)} MB` : "Size unknown";
           
@@ -3342,6 +3398,12 @@ async function renderGDrive() {
 
 async function handleGDriveLogin() {
   if (isSigningIn) return;
+  await loadGDriveServiceStatus();
+  if (isServiceDriveMode()) {
+    gdriveError = null;
+    await triggerGDriveLoad();
+    return;
+  }
   try {
     isSigningIn = true;
     await ensureFirebaseInitialized();
@@ -3381,6 +3443,12 @@ async function handleGDriveLogin() {
 
 async function handleGDriveLogout() {
   try {
+    await loadGDriveServiceStatus();
+    if (isServiceDriveMode()) {
+      gdriveError = "Workspace Drive mode does not require sign-out.";
+      renderGDrive();
+      return;
+    }
     await ensureFirebaseInitialized();
     await signOut(auth);
     googleUser = null;
@@ -3399,7 +3467,8 @@ async function handleGDriveLogout() {
 }
 
 async function triggerGDriveLoad() {
-  if (!cachedAccessToken) return;
+  await loadGDriveServiceStatus();
+  if (!cachedAccessToken && !isServiceDriveMode()) return;
   isGDriveLoading = true;
   gdriveError = null;
   renderGDrive();
@@ -3425,8 +3494,27 @@ async function triggerGDriveLoad() {
   }
 }
 
+function isServiceDriveMode() {
+  return Boolean(gdriveServiceStatus && gdriveServiceStatus.configured && gdriveServiceStatus.connected);
+}
+
+async function loadGDriveServiceStatus() {
+  if (gdriveServiceStatusChecked) return gdriveServiceStatus;
+  gdriveServiceStatusChecked = true;
+  try {
+    const res = await fetch(apiUrl("/api/drive/service-status"));
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data) {
+      gdriveServiceStatus = data;
+    }
+  } catch {}
+  return gdriveServiceStatus;
+}
+
 function handleGDriveImport(file) {
-  const proxyUrl = `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
+  const proxyUrl = isServiceDriveMode()
+    ? `/api/drive/file/${encodeURIComponent(file.id)}`
+    : `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
   
   let extra = file.extra || null;
   if (!extra || !Object.keys(extra).length) {
@@ -4502,4 +4590,3 @@ function renderSettingsWorkspace() {
     elements.settingsClearCacheBtn.dataset.listenerAttached = "true";
   }
 }
-
