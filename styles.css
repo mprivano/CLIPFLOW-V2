@@ -446,23 +446,7 @@ svg {
 
 .clip-grid {
   display: grid;
-  gap: 14px;
-}
-
-.clip-card {
-  display: grid;
-  grid-template-columns: 126px minmax(0, 1fr);
-  gap: 14px;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: #161F32;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
-}
-
-.clip-card.review {
-  border-color: rgba(242, 184, 75, 0.75);
+  gap: 10px;
 }
 
 .clip-thumb {
@@ -1069,6 +1053,10 @@ svg {
     grid-template-columns: 1fr;
   }
 
+  .clip-details-grid {
+    grid-template-columns: 104px minmax(0, 1fr);
+  }
+
   .sidebar {
     position: static;
     height: auto;
@@ -1117,6 +1105,7 @@ svg {
   }
 
   .clip-card,
+  .clip-details-grid,
   .queue-row {
     grid-template-columns: 1fr;
   }
@@ -1147,6 +1136,62 @@ svg {
   to { transform: rotate(360deg); }
 }
 
+.clip-details {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #161F32;
+  transition: background-color 0.2s;
+}
+
+.clip-details[open] {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+}
+
+.clip-details.review {
+  border-color: rgba(242, 184, 75, 0.75);
+}
+
+.clip-details.selected-card {
+  border: 2px solid #553c9a;
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.clip-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none; /* remove default arrow */
+}
+
+.clip-summary::-webkit-details-marker {
+  display: none; /* remove default arrow for chrome */
+}
+
+.clip-summary:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.summary-left, .summary-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.summary-title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
 /* --- OPTIMIZATION SECTION HOVER INTERACTIONS --- */
 .optimization-card {
   transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
@@ -1174,4 +1219,31 @@ svg {
   background: rgba(239, 68, 68, 0.1) !important;
   color: #ef4444 !important;
   border-color: rgba(239, 68, 68, 0.2) !important;
+}
+
+.score-row-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.score-row-summary .score-meter {
+  width: 100px;
+}
+
+.clip-details-body {
+  padding: 16px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.clip-details-grid {
+  display: grid;
+  grid-template-columns: 126px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.clip-details-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }

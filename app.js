@@ -1,7 +1,5 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-
 const storageKey = "clipflow-studio-state-v1";
+const credentialVaultKey = "clipflow-credential-vault-v1";
 
 let googleUser = null;
 let cachedAccessToken = null;
@@ -173,7 +171,14 @@ const elements = {
   settingsCacheSize: document.querySelector("#settingsCacheSize"),
   aiScriptboardContainer: document.querySelector("#aiScriptboardContainer"),
   multiVaultContainer: document.querySelector("#multiVaultContainer"),
+  manualUploadForm: document.querySelector("#manualUploadForm"),
+  manualUploadTitle: document.querySelector("#manualUploadTitle"),
+  manualUploadVideo: document.querySelector("#manualUploadVideo"),
+  manualUploadTranscriptText: document.querySelector("#manualUploadTranscriptText"),
+  manualUploadScore: document.querySelector("#manualUploadScore"),
 };
+
+document.title = "ClipFlow";
 
 hydrateForm();
 render();
@@ -222,6 +227,49 @@ elements.form.addEventListener("submit", async (event) => {
     setProcessing(false);
   }
 });
+
+if (elements.manualUploadForm) {
+  elements.manualUploadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const title = elements.manualUploadTitle.value;
+    const videoFile = elements.manualUploadVideo.files[0];
+    const transcriptText = elements.manualUploadTranscriptText.value;
+    const score = parseInt(elements.manualUploadScore.value, 10) || 85;
+
+    if (!title || !videoFile) {
+      setClipStatus("Please provide a title and a video file.", "error");
+      return;
+    }
+
+    if (!cachedAccessToken && !isServiceDriveMode()) {
+      setClipStatus("Please sign in to Google Drive first.", "error");
+      location.hash = "#google-drive";
+      return;
+    }
+
+    const submitButton = elements.manualUploadForm.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    submitButton.textContent = "Uploading...";
+
+    try {
+      const clipData = {
+        id: `manual-${Date.now()}`,
+        title: title,
+        transcript: transcriptText,
+        score: score,
+        videoFile: videoFile,
+      };
+      await uploadClipToGoogleDrive(clipData);
+      elements.manualUploadForm.reset();
+      setClipStatus("Manual upload to Google Drive successful!", "ready");
+    } catch (err) {
+      setClipStatus(`Manual upload failed: ${err.message}`, "error");
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = "Upload to Google Drive";
+    }
+  });
+}
 
 elements.chooseFile.addEventListener("click", () => {
   elements.videoFile.click();
@@ -444,6 +492,9 @@ if (elements.toggleDirectTikTokBtn && elements.directTikTokForm) {
   elements.toggleDirectTikTokBtn.addEventListener("click", () => {
     const isHidden = elements.directTikTokForm.style.display === "none";
     elements.directTikTokForm.style.display = isHidden ? "block" : "none";
+    if (isHidden) {
+      hydrateDirectTikTokForm();
+    }
     
     // Auto-setup toggles check
     const modeRadios = document.querySelectorAll('input[name="directTikTokMode"]');
@@ -462,8 +513,6 @@ if (elements.toggleDirectTikTokBtn && elements.directTikTokForm) {
 if (elements.cancelDirectTikTok && elements.directTikTokForm) {
   elements.cancelDirectTikTok.addEventListener("click", () => {
     elements.directTikTokForm.style.display = "none";
-    elements.directTikTokUsername.value = "";
-    elements.directTikTokToken.value = "";
     const apiFields = document.querySelector("#directTikTokApiFields");
     if (apiFields) apiFields.style.display = "none";
     const defaultRadio = document.querySelector('input[name="directTikTokMode"][value="assistant"]');
@@ -504,7 +553,18 @@ if (elements.saveDirectTikTok && elements.directTikTokForm) {
     };
 
     if (!state.accounts) state.accounts = [];
-    state.accounts.push(newAccount);
+    const existingIndex = state.accounts.findIndex((account) => {
+      return account.provider === "direct" && String(account.handle || "").toLowerCase() === username.toLowerCase();
+    });
+    if (existingIndex >= 0) {
+      state.accounts[existingIndex] = {
+        ...state.accounts[existingIndex],
+        ...newAccount,
+        id: state.accounts[existingIndex].id,
+      };
+    } else {
+      state.accounts.push(newAccount);
+    }
     saveAndRender();
 
     // Reset Form
@@ -524,15 +584,15 @@ if (elements.toggleTelegramBtn && elements.telegramForm) {
   elements.toggleTelegramBtn.addEventListener("click", () => {
     const isHidden = elements.telegramForm.style.display === "none";
     elements.telegramForm.style.display = isHidden ? "block" : "none";
+    if (isHidden) {
+      hydrateTelegramForm();
+    }
   });
 }
 
 if (elements.cancelTelegram && elements.telegramForm) {
   elements.cancelTelegram.addEventListener("click", () => {
     elements.telegramForm.style.display = "none";
-    elements.telegramBotToken.value = "";
-    elements.telegramChatId.value = "";
-    elements.telegramHandle.value = "";
   });
 }
 
@@ -582,7 +642,18 @@ if (elements.saveTelegram && elements.telegramForm) {
     };
 
     if (!state.accounts) state.accounts = [];
-    state.accounts.push(newAccount);
+    const existingIndex = state.accounts.findIndex((account) => {
+      return account.provider === "telegram" && String(account.telegramChatId || "") === chatId;
+    });
+    if (existingIndex >= 0) {
+      state.accounts[existingIndex] = {
+        ...state.accounts[existingIndex],
+        ...newAccount,
+        id: state.accounts[existingIndex].id,
+      };
+    } else {
+      state.accounts.push(newAccount);
+    }
     saveAndRender();
 
     // Reset Form
@@ -792,7 +863,7 @@ elements.scheduleApproved.addEventListener("click", async () => {
 
 elements.resetDemo.addEventListener("click", () => {
   localStorage.removeItem(storageKey);
-  Object.assign(state, createInitialState());
+  Object.assign(state, restoreCredentialVault(createInitialState()));
   selectedVideoFile = null;
   elements.videoFile.value = "";
   hydrateForm();
@@ -806,7 +877,17 @@ elements.resetDemo.addEventListener("click", () => {
 function createInitialState() {
   return {
     preferences: {
-      autoGDriveBackup: true
+      autoGDriveBackup: true,
+      analyticsEnabled: true,
+      settingsEnabled: true,
+      scriptboardEnabled: true,
+      kineticEnabled: true,
+      seoHashtags: true,
+      safeOverlays: true,
+      wasmAcceleration: true,
+      indexedDbCache: true,
+      multiVaultEnabled: true,
+      gdriveSyncEnabled: true
     },
     source: {
       youtubeUrl: "",
@@ -828,8 +909,8 @@ function createInitialState() {
       vizardShareLink: "",
     },
     understanding: null,
-    clips: [],
-    accounts: baseAccounts.map((account) => ({ ...account })),
+    clips: [], // Clips are loaded separately
+    accounts: [], // Accounts are loaded and normalized in restoreCredentialVault
     vizardProjects: [],
     queue: [],
     vizardApiAccounts: [],
@@ -844,25 +925,133 @@ function createInitialState() {
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey));
-    if (saved && saved.source && Array.isArray(saved.accounts)) {
+    // Always attempt to load saved data, even if some parts are missing.
+    // Fallback to initial state for missing parts.
+    if (saved && typeof saved === 'object') {
       const clips = normalizeClips(saved.clips || []);
-      return {
+      return restoreCredentialVault({
         ...createInitialState(),
         ...saved,
-        accounts: normalizeAccounts(saved.accounts),
+        accounts: saved.accounts || [],
         clips,
         vizardProjects: normalizeVizardProjects(saved.vizardProjects || [], clips, saved.source || {}),
-      };
+        queue: normalizeQueue(saved.queue || []), // Explicitly normalize and load queue
+      });
     }
   } catch (error) {
     console.warn("Unable to load saved studio state", error);
   }
-  return createInitialState();
+  return restoreCredentialVault(createInitialState()); // This will also pass empty accounts
+}
+
+function normalizeQueue(queue) {
+  return Array.isArray(queue) ? queue : [];
 }
 
 function saveAndRender() {
+  saveCredentialVault();
   localStorage.setItem(storageKey, JSON.stringify(state));
   render();
+}
+
+function loadCredentialVault() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(credentialVaultKey));
+    if (saved && typeof saved === "object") {
+      return {
+        accounts: Array.isArray(saved.accounts) ? saved.accounts : [],
+        vizardApiAccounts: Array.isArray(saved.vizardApiAccounts) ? saved.vizardApiAccounts : [],
+        activeVizardAccountId: saved.activeVizardAccountId || "",
+      };
+    }
+  } catch (error) {
+    console.warn("Unable to load saved credential vault", error);
+  }
+  return { accounts: [], vizardApiAccounts: [], activeVizardAccountId: "" };
+}
+
+function saveCredentialVault() {
+  const directAccounts = (state.accounts || []).filter((account) => {
+    return account.provider === "direct" || account.provider === "telegram";
+  });
+
+  const vault = {
+    accounts: directAccounts,
+    vizardApiAccounts: state.vizardApiAccounts || [],
+    activeVizardAccountId: state.activeVizardAccountId || "system",
+  };
+
+  localStorage.setItem(credentialVaultKey, JSON.stringify(vault));
+}
+
+function restoreCredentialVault(appState) {
+  const vault = loadCredentialVault();
+  const accountsById = new Map((appState.accounts || []).map((account) => [account.id, account]));
+
+  // Merge accounts from the credential vault (direct/telegram)
+  vault.accounts.forEach((account) => {
+    if (!account?.id) return;
+    accountsById.set(account.id, {
+      ...accountsById.get(account.id),
+      ...account,
+    });
+  });
+
+  // Ensure base accounts are always present, merging with any saved properties
+  // This ensures default Vizard accounts are always in the list,
+  // and their 'enabled' status is preserved if it was saved.
+  baseAccounts.forEach(baseAccount => {
+    if (accountsById.has(baseAccount.id)) {
+      accountsById.set(baseAccount.id, { ...baseAccount, ...accountsById.get(baseAccount.id) });
+    } else {
+      accountsById.set(baseAccount.id, { ...baseAccount });
+    }
+  });
+
+  return {
+    ...appState,
+    accounts: Array.from(accountsById.values()), // This is the final, merged list
+    vizardApiAccounts: vault.vizardApiAccounts.length
+      ? vault.vizardApiAccounts
+      : (appState.vizardApiAccounts || []),
+    activeVizardAccountId: vault.activeVizardAccountId || appState.activeVizardAccountId || "system",
+  };
+}
+
+function hydrateDirectTikTokForm() {
+  const saved = [...(state.accounts || [])].reverse().find((account) => account.provider === "direct");
+  if (!saved) return;
+
+  if (elements.directTikTokUsername) {
+    elements.directTikTokUsername.value = saved.handle || "";
+  }
+  if (elements.directTikTokToken) {
+    elements.directTikTokToken.value = saved.directToken || "";
+  }
+
+  const mode = saved.directMode || "assistant";
+  const modeRadio = document.querySelector(`input[name="directTikTokMode"][value="${mode}"]`);
+  if (modeRadio) modeRadio.checked = true;
+
+  const apiFields = document.querySelector("#directTikTokApiFields");
+  if (apiFields) {
+    apiFields.style.display = mode === "api" ? "flex" : "none";
+  }
+}
+
+function hydrateTelegramForm() {
+  const saved = [...(state.accounts || [])].reverse().find((account) => account.provider === "telegram");
+  if (!saved) return;
+
+  if (elements.telegramBotToken) {
+    elements.telegramBotToken.value = saved.telegramBotToken || "";
+  }
+  if (elements.telegramChatId) {
+    elements.telegramChatId.value = saved.telegramChatId || "";
+  }
+  if (elements.telegramHandle) {
+    elements.telegramHandle.value = saved.handle || "";
+  }
 }
 
 function hydrateForm() {
@@ -958,16 +1147,11 @@ function renderClips() {
   }
 
   clips.forEach((clip) => {
-    const article = document.createElement("article");
+    const details = document.createElement("details");
     const isSelected = state.selectedClipIds && state.selectedClipIds.includes(clip.id);
-    article.className = `clip-card ${clip.approved ? "approved" : "review"}`;
+    details.className = `clip-details ${clip.approved ? "approved" : "review"}`;
     if (isSelected) {
-      article.classList.add("selected-card");
-      article.style.border = "2px solid #553c9a";
-      article.style.background = "rgba(99, 102, 241, 0.04)";
-    } else {
-      article.style.border = "";
-      article.style.background = "";
+      details.classList.add("selected-card");
     }
 
     const videoSrc = assetUrl(clip.videoUrl || clip.clipEditorUrl);
@@ -983,7 +1167,7 @@ function renderClips() {
       : "";
 
     const rawMedia = clip.videoUrl
-      ? `<div class="click-to-play-wrapper" data-video-src="${escapeHtml(videoSrc)}" data-editor-url="${escapeHtml(clip.clipEditorUrl || clip.videoUrl)}" style="position: relative; width: 100%; height: 180px; overflow: hidden; background: #0f172a; border-radius: 6px 6px 0 0; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+      ? `<div class="click-to-play-wrapper" data-video-src="${escapeHtml(videoSrc)}" data-editor-url="${escapeHtml(clip.clipEditorUrl || clip.videoUrl)}" style="position: relative; width: 100%; height: 180px; overflow: hidden; background: #0f172a; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer;">
           ${clip.thumbUrl ? `<img src="${escapeHtml(assetUrl(clip.thumbUrl))}" style="width: 100%; height: 100%; object-fit: cover; position: absolute; inset: 0;" />` : `<div style="width: 100%; height: 100%; background: linear-gradient(135deg, #1e1b4b, #0f172a); position: absolute; inset: 0;"></div>`}
           ${safeAreaOverlayHtml}
           <!-- Overlay play container -->
@@ -999,15 +1183,10 @@ function renderClips() {
         </div>`;
 
     const checkboxHtml = `
-      <div class="clip-checkbox-container" style="position: absolute; top: 6px; left: 6px; z-index: 30; background: rgba(15, 23, 42, 0.85); padding: 4px 6px; border-radius: 4px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); pointer-events: auto;" onclick="event.stopPropagation();">
+      <div class="clip-checkbox-container" style="display: flex; align-items: center; justify-content: center; pointer-events: auto;" onclick="event.stopPropagation();">
          <input type="checkbox" class="clip-select-checkbox" data-clip-id="${clip.id}" ${isSelected ? "checked" : ""} style="width: 14px; height: 14px; cursor: pointer; margin: 0; outline: none;">
       </div>
     `;
-
-    const media = `<div class="media-column-wrapper" style="position: relative; width: 100%; height: 100%; min-height: 120px;">
-      ${checkboxHtml}
-      ${rawMedia}
-    </div>`;
 
     // Dynamic SEO tags suggestions check
     const hashtagsHtml = state.preferences?.seoHashtags
@@ -1024,39 +1203,50 @@ function renderClips() {
       ? `<span class="platform-chip" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.25); font-size: 0.65rem;" title="Hub sync status active">☁️ Backup Sync Active</span>`
       : "";
 
-    article.innerHTML = `
-      ${media}
-      <div class="clip-body">
-         <div class="clip-topline">
-           <span class="clip-state ${clip.approved ? "approved" : "review"}">${clip.approved ? "Approved" : "Review"}</span>
-           <span class="queue-meta">${formatTime(clip.start)}-${formatTime(clip.end)}</span>
-         </div>
-         <div>
-           <h3>${escapeHtml(clip.title)}</h3>
-           <p>${escapeHtml(clip.caption)}</p>
-           ${hashtagsHtml}
-           ${clip.reason ? `<p class="clip-reason">${escapeHtml(clip.reason)}</p>` : ""}
-           ${clip.transcript ? `<details class="transcript-snippet"><summary>Transcript</summary><p>${escapeHtml(clip.transcript)}</p></details>` : ""}
-         </div>
-         <div class="score-row">
-           <div class="score-meter" aria-label="Virality score ${clip.score}">
-             <span style="--score: ${clip.score}%"></span>
-           </div>
-           <strong>${clip.score}</strong>
-           <span class="queue-meta">${clip.duration}s</span>
-         </div>
-         <div class="clip-actions" style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 10px;">
-           ${clip.platforms.map((platform) => `<span class="platform-chip ${platformClass(platform)}">${platform}</span>`).join("")}
-           ${backupHtml}
-           <button class="mini-button ${clip.approved ? "active" : ""}" type="button" data-action="approve" data-clip-id="${clip.id}">
-             ${clip.approved ? "Approved" : "Approve"}
-           </button>
-           <button class="mini-button" type="button" data-action="duplicate" data-clip-id="${clip.id}">Remix</button>
-           <button class="mini-button danger" type="button" data-action="delete" data-clip-id="${clip.id}">Delete</button>
-         </div>
+    details.innerHTML = `
+      <summary class="clip-summary">
+        <div class="summary-left">
+          ${checkboxHtml}
+          <span class="clip-state ${clip.approved ? "approved" : "review"}">${clip.approved ? "Approved" : "Review"}</span>
+          <h3 class="summary-title">${escapeHtml(clip.title)}</h3>
+        </div>
+        <div class="summary-right">
+          <div class="score-row-summary">
+            <div class="score-meter" aria-label="Virality score ${clip.score}">
+              <span style="--score: ${clip.score}%"></span>
+            </div>
+            <strong>${clip.score}</strong>
+          </div>
+          <button class="mini-button ${clip.approved ? "active" : ""}" type="button" data-action="approve" data-clip-id="${clip.id}" onclick="event.preventDefault();">
+            ${clip.approved ? "Approved" : "Approve"}
+          </button>
+        </div>
+      </summary>
+      <div class="clip-details-body">
+        <div class="clip-details-grid">
+          <div class="clip-details-media">
+            ${rawMedia}
+          </div>
+          <div class="clip-details-info">
+            <p>${escapeHtml(clip.caption)}</p>
+            ${hashtagsHtml}
+            ${clip.reason ? `<p class="clip-reason">${escapeHtml(clip.reason)}</p>` : ""}
+            ${clip.transcript ? `<details class="transcript-snippet"><summary>Transcript</summary><p>${escapeHtml(clip.transcript)}</p></details>` : ""}
+            <div class="score-row" style="margin-top: 12px;">
+              <span class="queue-meta">${formatTime(clip.start)}-${formatTime(clip.end)}</span>
+              <span class="queue-meta">${clip.duration}s</span>
+            </div>
+            <div class="clip-actions" style="margin-top: 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              ${clip.platforms.map((platform) => `<span class="platform-chip ${platformClass(platform)}">${platform}</span>`).join("")}
+              ${backupHtml}
+              <button class="mini-button" type="button" data-action="duplicate" data-clip-id="${clip.id}">Remix</button>
+              <button class="mini-button danger" type="button" data-action="delete" data-clip-id="${clip.id}">Delete</button>
+            </div>
+          </div>
+        </div>
       </div>
     `;
-    elements.clipGrid.appendChild(article);
+    elements.clipGrid.appendChild(details);
   });
 }
 
@@ -1227,7 +1417,9 @@ function renderQueue() {
     row.innerHTML = `
       <div class="queue-title">
         <strong>${escapeHtml(job.clipTitle)}</strong>
-        <small>${escapeHtml(job.platform)} ${escapeHtml(job.handle)} - ${escapeHtml(job.scheduledFor)}</small>
+        <small>${escapeHtml(job.platform)} ${escapeHtml(job.handle)}</small>
+        ${job.uploadedToAccount ? `<small style="color: var(--muted); font-size: 0.75rem; margin-top: 2px;">Uploaded to: ${escapeHtml(job.uploadedToAccount)} ${job.isTelegramBot ? '(Telegram Bot)' : ''}</small>` : ''}
+        ${job.uploadDate && job.uploadTime ? `<small style="color: var(--muted); font-size: 0.75rem; margin-top: 2px;">On: ${escapeHtml(job.uploadDate)} at ${escapeHtml(job.uploadTime)}</small>` : ''}
         ${job.error ? `<small class="queue-error">${escapeHtml(job.error)}</small>` : ""}
       </div>
       <span class="queue-status ${job.statusType}">${escapeHtml(job.status)}</span>
@@ -1462,7 +1654,7 @@ async function syncVizardAccounts() {
     }
 
     const savedById = new Map(state.accounts.map((account) => [account.id, account]));
-    const accounts = (data.accounts || [])
+    const vizardSyncedAccounts = (data.accounts || [])
       .filter((account) => account.id)
       .map((account) => {
         const mapped = mapVizardAccount(account);
@@ -1473,13 +1665,20 @@ async function syncVizardAccounts() {
         };
       });
 
-    state.accounts = accounts.length ? accounts : baseAccounts.map((account) => ({ ...account }));
+    // Merge Vizard synced accounts with existing accounts (preserving direct/telegram)
+    const newAccountsMap = new Map();
+    state.accounts.forEach(acc => newAccountsMap.set(acc.id, acc)); // Keep existing
+    vizardSyncedAccounts.forEach(acc => newAccountsMap.set(acc.id, acc)); // Overwrite/add Vizard ones
+    baseAccounts.forEach(baseAcc => { // Ensure base accounts are still there if not synced
+      if (!newAccountsMap.has(baseAcc.id)) newAccountsMap.set(baseAcc.id, baseAcc);
+    });
+    state.accounts = Array.from(newAccountsMap.values());
     saveAndRender();
     setClipStatus(
-      accounts.length
-        ? `Synced ${accounts.length} connected Vizard account${accounts.length === 1 ? "" : "s"}.`
+      vizardSyncedAccounts.length
+        ? `Synced ${vizardSyncedAccounts.length} connected Vizard account${vizardSyncedAccounts.length === 1 ? "" : "s"}.`
         : "No Vizard accounts found yet. Use Link, connect accounts in Vizard, then sync.",
-      accounts.length ? "ready" : "",
+      vizardSyncedAccounts.length ? "ready" : "",
     );
   } catch (error) {
     setClipStatus(error.message || "Could not sync Vizard accounts.", "error");
@@ -1744,6 +1943,18 @@ async function publishApprovedClips() {
       job.status = "Failed";
       job.statusType = "blocked";
       job.error = error.message || "The platform rejected this publish.";
+    } finally {
+      // After attempting to publish, if successful, try to DELETE the GDrive folder
+      if (job.status === "Published") {
+        const sourceClip = state.clips.find(c => c.id === job.clipId);
+        if (sourceClip && sourceClip.gdriveFolderId) {
+          fetch(apiUrl("/api/drive/delete-discarded"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ folderIds: [sourceClip.gdriveFolderId] }),
+          }).catch(e => console.warn("Failed to auto-delete GDrive folder:", e));
+        }
+      }
     }
 
     saveAndRender();
@@ -1785,6 +1996,11 @@ function createPublishJob(clip, account) {
     status: missingClipId ? "Video source needed" : accountStatus.label,
     statusType: blocked ? "blocked" : "ready",
     scheduledFor: "Now",
+    // New fields to remember upload details
+    uploadedToAccount: account.handle,
+    isTelegramBot: account.provider === "telegram",
+    uploadTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    uploadDate: new Date().toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }),
   };
 }
 
@@ -2071,32 +2287,6 @@ function isPublishReadyAccount(account) {
     return Boolean(account.connected && account.gate === "ready");
   }
   return Boolean(account.vizardSocialAccountId && account.connected && account.gate === "ready");
-}
-
-function normalizeAccounts(accounts) {
-  const savedById = new Map(accounts.map((account) => [account.id, account]));
-  const normalized = baseAccounts.map((account) => {
-    const saved = savedById.get(account.id);
-    if (!saved || !saved.vizardSocialAccountId) {
-      return {
-        ...account,
-        enabled: saved?.enabled ?? account.enabled,
-      };
-    }
-    return {
-      ...account,
-      ...saved,
-    };
-  });
-
-  accounts.forEach((account) => {
-    if (!savedById.has(account.id) || baseAccounts.some((baseAccount) => baseAccount.id === account.id)) {
-      return;
-    }
-    normalized.push(account);
-  });
-
-  return normalized;
 }
 
 function normalizeClips(clips) {
@@ -2449,74 +2639,10 @@ function escapeHtml(value) {
 }
 
 // ==========================================
-// Google Drive & Firebase Auth Integration
+// Google Drive JSON Credential Integration
 // ==========================================
 
-let app = null;
-let auth = null;
-let provider = null;
-let firebaseInitializedPromise = null;
-
-async function ensureFirebaseInitialized() {
-  if (firebaseInitializedPromise) return firebaseInitializedPromise;
-
-  firebaseInitializedPromise = (async () => {
-    try {
-      const configRes = await fetch("./firebase-applet-config.json");
-      const firebaseConfig = await configRes.json();
-      app = initializeApp(firebaseConfig);
-      auth = getAuth(app);
-      provider = new GoogleAuthProvider();
-      provider.addScope("https://www.googleapis.com/auth/drive.readonly");
-      provider.addScope("https://www.googleapis.com/auth/drive.file");
-      provider.addScope("https://www.googleapis.com/auth/userinfo.profile");
-      provider.addScope("https://www.googleapis.com/auth/userinfo.email");
-      provider.setCustomParameters({
-        prompt: "select_account"
-      });
-
-      onAuthStateChanged(auth, async (user) => {
-        if (user) {
-          googleUser = user;
-          const storedToken = localStorage.getItem("clipflow_gdrive_access_token");
-          const storedUser = localStorage.getItem("clipflow_google_user");
-          const storedTimestamp = localStorage.getItem("clipflow_gdrive_token_timestamp");
-          if (storedToken && storedUser && storedTimestamp) {
-            const ageMs = Date.now() - parseInt(storedTimestamp, 10);
-            if (ageMs < 50 * 60 * 1000) {
-              cachedAccessToken = storedToken;
-              try {
-                googleUser = JSON.parse(storedUser);
-              } catch (e) {}
-              triggerGDriveLoad().catch(e => console.warn("Background GDrive loading error on restore:", e));
-            } else {
-              localStorage.removeItem("clipflow_gdrive_access_token");
-              localStorage.removeItem("clipflow_google_user");
-              localStorage.removeItem("clipflow_gdrive_token_timestamp");
-            }
-          }
-        } else {
-          googleUser = null;
-          cachedAccessToken = null;
-          gdriveFiles = [];
-          gdriveError = null;
-        }
-        renderGDrive();
-      });
-    } catch (err) {
-      console.error("Failed to initialize Firebase:", err);
-      firebaseInitializedPromise = null; // Reset to allow retry
-      throw err;
-    }
-  })();
-
-  return firebaseInitializedPromise;
-}
-
-// Start background initialization instantly
-ensureFirebaseInitialized().catch(err => {
-  console.error("Background Firebase initialization failed:", err);
-});
+// Drive uses the server-side JSON credential path so the app does not depend on popup OAuth.
 
 function handleGDriveUnauthorized() {
   cachedAccessToken = null;
@@ -2608,10 +2734,10 @@ async function uploadGDriveMetadataFile(subFolderId, name, metadataObj) {
 const liveUploadingUrls = new Set();
 
 async function getOrCreateGDriveSubFolder(folderName, parentFolderId) {
-  if (!cachedAccessToken) {
+  if (!cachedAccessToken && !isServiceDriveMode()) {
     throw new Error("Log in required to create folders.");
   }
-  if (!folderName.trim()) {
+  if (!String(folderName || "").trim()) {
     throw new Error("Folder name cannot be empty.");
   }
   
@@ -2651,13 +2777,13 @@ async function getOrCreateGDriveSubFolder(folderName, parentFolderId) {
 }
 
 async function uploadClipToGoogleDrive(clip) {
-  if (!cachedAccessToken) {
+  if (!cachedAccessToken && !isServiceDriveMode()) {
     setClipStatus("Please sign in to Google Drive under the Google Drive tab first!", "error");
     location.hash = "#google-drive";
     return;
   }
 
-  const videoUrl = clip.videoUrl;
+  const videoUrl = clip.videoUrl || ""; // Can be empty for manual uploads
   if (!videoUrl) return;
 
   const clipId = clip.id;
@@ -2665,7 +2791,7 @@ async function uploadClipToGoogleDrive(clip) {
   if (liveUploadingUrls.has(videoUrl) || liveUploadingClipIds.has(clipId)) return;
   
   state.gdriveBackedUpUrls = state.gdriveBackedUpUrls || [];
-  if (state.gdriveBackedUpUrls.includes(videoUrl)) {
+  if (videoUrl && state.gdriveBackedUpUrls.includes(videoUrl)) {
     clip.gdriveBackedUp = true;
     return;
   }
@@ -2728,14 +2854,20 @@ async function uploadClipToGoogleDrive(clip) {
     if (!existingFileId) {
       setClipStatus(`Saving "${clip.title}" to Google Drive...`, "ready");
 
-      const isBlobLocal = videoUrl.startsWith("/media") || videoUrl.startsWith("/") || videoUrl.startsWith(location.origin);
-      const downloadUrl = isBlobLocal ? videoUrl : `/api/proxy-video?url=${encodeURIComponent(videoUrl)}&token=${encodeURIComponent(cachedAccessToken)}`;
-
-      const videoRes = await fetch(downloadUrl);
-      if (!videoRes.ok) {
-        throw new Error(`Failed to download video file: ${videoRes.statusText}`);
+      let videoBlob;
+      if (clip.videoFile instanceof File) {
+        videoBlob = clip.videoFile;
+      } else if (videoUrl) {
+        const isBlobLocal = videoUrl.startsWith("/media") || videoUrl.startsWith("/") || videoUrl.startsWith(location.origin);
+        const downloadUrl = isBlobLocal ? videoUrl : `/api/proxy-video?url=${encodeURIComponent(videoUrl)}&token=${encodeURIComponent(cachedAccessToken)}`;
+        const videoRes = await fetch(downloadUrl);
+        if (!videoRes.ok) {
+          throw new Error(`Failed to download video file: ${videoRes.statusText}`);
+        }
+        videoBlob = await videoRes.blob();
+      } else {
+        throw new Error("No video source (URL or File) provided for upload.");
       }
-      const videoBlob = await videoRes.blob();
 
       // Upload the .mp4 video inside the newly created subfolder
       const metadata = {
@@ -2795,7 +2927,7 @@ async function uploadClipToGoogleDrive(clip) {
     liveUploadingUrls.delete(videoUrl);
 
     // Track successfully backed up urls in local persistent state
-    if (!state.gdriveBackedUpUrls.includes(videoUrl)) {
+    if (videoUrl && !state.gdriveBackedUpUrls.includes(videoUrl)) {
       state.gdriveBackedUpUrls.push(videoUrl);
     }
 
@@ -2804,6 +2936,7 @@ async function uploadClipToGoogleDrive(clip) {
     if (clipIndex >= 0) {
       state.clips[clipIndex].gdriveBackedUp = true;
       if (gdriveFileId) {
+        state.clips[clipIndex].gdriveFolderId = subFolderId; // Store folder ID for discard action
         state.clips[clipIndex].gdriveFileId = gdriveFileId;
       }
     }
@@ -2815,6 +2948,7 @@ async function uploadClipToGoogleDrive(clip) {
         proj.clips[projClipIndex].gdriveBackedUp = true;
         if (gdriveFileId) {
           proj.clips[projClipIndex].gdriveFileId = gdriveFileId;
+          proj.clips[projClipIndex].gdriveFolderId = subFolderId;
         }
       }
     });
@@ -2980,13 +3114,20 @@ async function fetchGDriveFiles() {
         id: file.id,
         name: file.name,
         modifiedTime: file.modifiedTime,
-        size: file.size,
+        size: file.size, 
         extra: extra
       });
     }
 
-    // Sort compiledFiles by modifiedTime desc
-    compiledFiles.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
+    // Sort compiledFiles by virality score desc, then modifiedTime desc
+    compiledFiles.sort((a, b) => {
+      const scoreA = a.extra?.score || 0;
+      const scoreB = b.extra?.score || 0;
+      if (scoreB !== scoreA) {
+        return scoreB - scoreA;
+      }
+      return new Date(b.modifiedTime) - new Date(a.modifiedTime);
+    });
 
     return compiledFiles;
   } catch (err) {
@@ -3091,41 +3232,23 @@ async function renderGDrive() {
     if (elements.gdriveLogout) elements.gdriveLogout.style.display = "none";
   }
 
-  // If no auth, show standard Sign-In screen
+  // If JSON-backed Workspace Drive is not configured, show setup state.
   if (!isServiceDriveMode() && (!googleUser || !cachedAccessToken)) {
     elements.gdriveContainer.innerHTML = `
       <div class="empty-state" style="padding: 40px 16px; text-align: center;">
-        <div aria-hidden="true" style="margin-bottom: 16px; font-size: 3rem;">📂</div>
-        <h3>Access Synced Videos</h3>
+        <div aria-hidden="true" style="margin-bottom: 16px; font-size: 3rem;">🔐</div>
+        <h3>Workspace Drive JSON Required</h3>
         <p style="margin-bottom: 24px; color: var(--muted); max-width: 440px; margin-left: auto; margin-right: auto;">
-          Connect Google Drive to access all Mp4 videos synced from Vizard directly inside ClipFlow, without having to leave the app!
+          ClipFlow is set to use the server-side Google Drive JSON credential instead of browser Google sign-in.
         </p>
-        <button class="gsi-material-button" id="gdriveLoginBtn" type="button" style="align-self: center; background-color: white; border: 1px solid #747775; border-radius: 4px; box-sizing: border-box; color: #1f1f1f; cursor: pointer; font-family: 'Open Sans', arial, sans-serif; font-size: 14px; font-weight: 500; height: 40px; justify-content: center; letter-spacing: 0.25px; outline: none; overflow: hidden; padding: 0 12px; position: relative; text-align: center; transition: background-color .218s, border-color .218s, box-shadow .218s; user-select: none; width: auto; display: inline-flex; align-items: center; gap: 8px;">
-          <div class="gsi-material-button-icon" style="height: 20px; min-width: 20px; width: 20px; display: flex; align-items: center; justify-content: center;">
-            <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" style="display: block; width: 20px; height: 20px;">
-              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
-              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
-              <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
-              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
-            </svg>
-          </div>
-          <span class="gsi-material-button-contents">Sign in with Google</span>
-        </button>
-
-        <!-- Dynamic Developer Localhost Notice Box -->
-        <div class="developer-tip" style="margin-top: 32px; padding: 16px; background: rgba(99, 102, 241, 0.05); border: 1px dashed rgba(99, 102, 241, 0.3); border-radius: 8px; text-align: left; max-width: 500px; margin-left: auto; margin-right: auto; font-size: 0.8rem; line-height: 1.5; color: var(--muted);">
-          <strong style="color: #6366f1; display: block; margin-bottom: 6px; font-weight: 600;">🛠️ Running clipflow locally?</strong>
-          If you encounter a <code style="background: var(--bg); padding: 1px 4px; border-radius: 4px; color: var(--ink);">localhost not in authorized domains</code> error during sign-in, please verify:
-          <ol style="margin: 8px 0 0 16px; padding: 0; list-style-type: decimal; display: flex; flex-direction: column; gap: 4px;">
-            <li>Go to the <a href="https://console.firebase.google.com/" target="_blank" style="color: #6366f1; text-decoration: underline;">Firebase Console</a> and select your active project.</li>
-            <li>Navigate to <strong>Build &gt; Authentication &gt; Settings</strong> tab.</li>
-            <li>Under the <strong>Authorized domains</strong> list, click <strong>Add domain</strong> and enter <code style="background: var(--bg); padding: 1px 4px; border-radius: 4px; color: var(--ink);">localhost</code> and <code style="background: var(--bg); padding: 1px 4px; border-radius: 4px; color: var(--ink);">127.0.0.1</code>.</li>
-          </ol>
+        <div class="developer-tip" style="margin-top: 22px; padding: 16px; background: rgba(99, 102, 241, 0.05); border: 1px dashed rgba(99, 102, 241, 0.3); border-radius: 8px; text-align: left; max-width: 560px; margin-left: auto; margin-right: auto; font-size: 0.8rem; line-height: 1.5; color: var(--muted);">
+          <strong style="color: #6366f1; display: block; margin-bottom: 6px; font-weight: 600;">JSON credential lookup</strong>
+          Add a Google service account key at <code style="background: var(--bg); padding: 1px 4px; border-radius: 4px; color: var(--ink);">google-service-account.json</code>, or set <code style="background: var(--bg); padding: 1px 4px; border-radius: 4px; color: var(--ink);">GDRIVE_SERVICE_ACCOUNT_JSON</code> / <code style="background: var(--bg); padding: 1px 4px; border-radius: 4px; color: var(--ink);">GOOGLE_SERVICE_ACCOUNT_JSON</code>.
+          <br><br>
+          Current status: ${escapeHtml(gdriveServiceStatus?.message || "Service account credentials are not configured.")}
         </div>
       </div>
     `;
-    const btn = elements.gdriveContainer.querySelector("#gdriveLoginBtn");
-    if (btn) btn.addEventListener("click", handleGDriveLogin);
     return;
   }
 
@@ -3143,7 +3266,7 @@ async function renderGDrive() {
   const headerHTML = `
     <div style="margin-bottom: 14px; font-size: 0.85rem; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
       <span>${connectedLabel}</span>
-      <span>Total listed documents: <strong style="color: var(--ink);">${gdriveFiles.length} MP4s</strong></span>
+      <span>Listed: <strong style="color: var(--ink);">${gdriveFiles.length} MP4s</strong></span>
     </div>
 
     <!-- Google Drive Folder Selector & Creator -->
@@ -3404,41 +3527,8 @@ async function handleGDriveLogin() {
     await triggerGDriveLoad();
     return;
   }
-  try {
-    isSigningIn = true;
-    await ensureFirebaseInitialized();
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    
-    if (credential && credential.accessToken) {
-      cachedAccessToken = credential.accessToken;
-      googleUser = result.user;
-      
-      localStorage.setItem("clipflow_gdrive_access_token", cachedAccessToken);
-      localStorage.setItem("clipflow_google_user", JSON.stringify({
-        displayName: googleUser.displayName,
-        email: googleUser.email,
-        uid: googleUser.uid,
-        photoURL: googleUser.photoURL
-      }));
-      localStorage.setItem("clipflow_gdrive_token_timestamp", Date.now().toString());
-
-      gdriveError = null;
-      await triggerGDriveLoad();
-      // Auto-upload existing non-backed-up clips in the active list
-      if (state.clips && state.clips.length) {
-        triggerAutoBackupToGoogleDrive(state.clips);
-      }
-    } else {
-      throw new Error("Failed to receive Google access token from popup.");
-    }
-  } catch (err) {
-    console.error("Popup Error:", err);
-    gdriveError = err.message || "Sign in failed.";
-    renderGDrive();
-  } finally {
-    isSigningIn = false;
-  }
+  gdriveError = gdriveServiceStatus?.message || "Google Drive JSON credential is not configured.";
+  renderGDrive();
 }
 
 async function handleGDriveLogout() {
@@ -3449,8 +3539,6 @@ async function handleGDriveLogout() {
       renderGDrive();
       return;
     }
-    await ensureFirebaseInitialized();
-    await signOut(auth);
     googleUser = null;
     cachedAccessToken = null;
     gdriveFiles = [];
@@ -3499,7 +3587,6 @@ function isServiceDriveMode() {
 }
 
 async function loadGDriveServiceStatus() {
-  if (gdriveServiceStatusChecked) return gdriveServiceStatus;
   gdriveServiceStatusChecked = true;
   try {
     const res = await fetch(apiUrl("/api/drive/service-status"));
@@ -4549,7 +4636,7 @@ function renderSettingsWorkspace() {
     elements.settingsFPS.value = state.preferences.exportFps || "60";
   }
   if (elements.settingsWatermark) {
-    elements.settingsWatermark.value = state.preferences.watermark !== undefined ? state.preferences.watermark : "ClipFlow Studio";
+    elements.settingsWatermark.value = state.preferences.watermark !== undefined ? state.preferences.watermark : "ClipFlow";
   }
   if (elements.settingsAutoVizard) {
     elements.settingsAutoVizard.checked = state.preferences.autoVizard !== false;

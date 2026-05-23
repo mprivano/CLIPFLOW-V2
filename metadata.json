@@ -1,6 +1,6 @@
 {
-  "name": "ClipFlow Studio",
-  "description": "Turn long videos into scheduled TikToks, Reels, and YouTube Shorts. Featuring Vizard and local video clipping, direct TikTok publishing workspace, and automated Google Drive backups.",
+  "name": "ClipFlow",
+  "description": "A platform for turning long-form video into short-form clips.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

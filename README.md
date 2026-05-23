@@ -1,4 +1,4 @@
-# ClipFlow Studio
+# ClipFlow
 
 A local MVP for a platform that turns long-form video sources into short-form clip candidates, routes approved clips to multiple social accounts, and shows the publishing queue with platform-readiness gates.
 

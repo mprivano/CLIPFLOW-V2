@@ -1,3 +1,4 @@
+import "dotenv/config";
 import http from "node:http";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -8,6 +9,8 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const projectRoot = path.basename(__dirname) === "dist" ? path.dirname(__dirname) : __dirname;
+const staticRoot = fs.existsSync(path.join(__dirname, "index.html")) ? __dirname : projectRoot;
 
 const geminiApiKey = process.env.GEMINI_API_KEY || "";
 let ai: any = null;
@@ -19,13 +22,13 @@ const Type = {
   STRING: "STRING",
 };
 
-const rootDir = __dirname;
+const rootDir = projectRoot;
 const mediaDir = path.join(rootDir, "media");
 const uploadDir = path.join(mediaDir, "uploads");
 const outputDir = path.join(mediaDir, "outputs");
 const audioDir = path.join(mediaDir, "audio");
 const transcriptDir = path.join(mediaDir, "transcripts");
-const port = 3000;
+const port = Number(process.env.PORT) || 3000;
 const ffmpegPath = findBinary("ffmpeg");
 const ffprobePath = findBinary("ffprobe");
 const openaiApiKey = process.env.OPENAI_API_KEY || "";
@@ -34,7 +37,6 @@ const transcriptionModel = process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1"
 const analysisModel = process.env.OPENAI_ANALYSIS_MODEL || "gpt-5.4-mini";
 const maxTranscriptionBytes = 24 * 1024 * 1024;
 let googleDriveSession: any = null;
-let googleOAuthClientId: string | null = null;
 const gdriveServiceFolderId = String(process.env.GDRIVE_FOLDER_ID || process.env.GOOGLE_DRIVE_FOLDER_ID || "root").trim();
 let gdriveServiceCredentialsCache: any = undefined;
 let gdriveServiceTokenCache: { accessToken: string; expiresAt: number } | null = null;
@@ -142,6 +144,12 @@ async function start() {
 
       if (url.pathname === "/api/drive/folders" && request.method === "POST") {
         const result = await handleServiceDriveCreateFolder(request);
+        sendJson(response, result);
+        return;
+      }
+
+      if (url.pathname === "/api/drive/delete-discarded" && request.method === "POST") {
+        const result = await handleServiceDriveDeleteDiscarded(request);
         sendJson(response, result);
         return;
       }
@@ -507,6 +515,23 @@ async function handleServiceDriveCreateFolder(request: any) {
   };
 }
 
+async function handleServiceDriveDeleteDiscarded(request: any) {
+  const body = await readJsonRequest(request);
+  const folderIds = (Array.isArray(body.folderIds) ? body.folderIds : []).map(sanitizeDriveId).filter(id => id && id !== "root");
+
+  if (!folderIds.length) {
+    return { ok: true, deletedCount: 0 };
+  }
+
+  for (const folderId of folderIds) {
+    await driveServiceFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  return { ok: true, deletedCount: folderIds.length };
+}
+
 async function streamServiceDriveFile(request: any, response: any, fileId: string) {
   const safeFileId = sanitizeDriveId(fileId);
   if (!safeFileId || safeFileId === "root") {
@@ -670,6 +695,7 @@ async function listServiceDriveCompiledFiles(parentId: string) {
       modifiedTime: String(folder.modifiedTime || mp4.modifiedTime || ""),
       size: String(mp4.size || ""),
       extra,
+      folderId: String(folder.id || ""), // Add folderId here
     });
   }
 
@@ -680,10 +706,16 @@ async function listServiceDriveCompiledFiles(parentId: string) {
       modifiedTime: String(file.modifiedTime || ""),
       size: String(file.size || ""),
       extra: parseClipflowMetadataFromDescription(file.description),
+      folderId: null, // Direct files don't have a parent clip folder for discard action
     });
   }
 
   compiled.sort((a, b) => {
+    const scoreA = a.extra?.score || 0;
+    const scoreB = b.extra?.score || 0;
+    if (scoreB !== scoreA) {
+      return scoreB - scoreA;
+    }
     const timeA = Date.parse(a.modifiedTime || "") || 0;
     const timeB = Date.parse(b.modifiedTime || "") || 0;
     return timeB - timeA;
@@ -828,7 +860,7 @@ function toBase64Url(input: string) {
 }
 
 async function getServiceDriveCredentials() {
-  if (gdriveServiceCredentialsCache !== undefined) {
+  if (gdriveServiceCredentialsCache) {
     return gdriveServiceCredentialsCache;
   }
 
@@ -1055,54 +1087,6 @@ async function handleDownloadRequest(url: URL, request: any, response: any) {
   }
 
   response.end();
-}
-
-async function buildGoogleDriveAuthUrl() {
-  const redirectUri = `http://localhost:${port}/?externalAuth=1`;
-  const clientId = await getGoogleOAuthClientId(redirectUri);
-  const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-  authUrl.searchParams.set("client_id", clientId);
-  authUrl.searchParams.set("redirect_uri", redirectUri);
-  authUrl.searchParams.set("response_type", "token");
-  authUrl.searchParams.set("scope", [
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/drive.file",
-  ].join(" "));
-  authUrl.searchParams.set("include_granted_scopes", "true");
-  authUrl.searchParams.set("prompt", "select_account");
-  authUrl.searchParams.set("state", "clipflow-google-drive");
-  return authUrl.toString();
-}
-
-async function getGoogleOAuthClientId(continueUri: string) {
-  if (googleOAuthClientId) return googleOAuthClientId;
-
-  const configPath = path.join(rootDir, "firebase-applet-config.json");
-  const firebaseConfig = JSON.parse(await fsp.readFile(configPath, "utf8"));
-  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      providerId: "google.com",
-      continueUri,
-      customParameter: { prompt: "select_account" },
-      oauthScope: "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok || !data.authUri) {
-    throw new Error(data.error?.message || "Could not create Google sign-in link.");
-  }
-
-  const authUri = new URL(data.authUri);
-  googleOAuthClientId = authUri.searchParams.get("client_id");
-  if (!googleOAuthClientId) {
-    throw new Error("Google sign-in link did not include a client ID.");
-  }
-  return googleOAuthClientId;
 }
 
 function openExternalUrl(targetUrl: string) {
@@ -2631,9 +2615,9 @@ function resolveMediaPath(mediaUrl) {
 
 async function serveStatic(requestPath, response) {
   const cleanPath = decodeURIComponent(requestPath.split("?")[0]);
-  const filePath = path.normalize(path.join(rootDir, cleanPath === "/" ? "index.html" : cleanPath));
+  const filePath = path.normalize(path.join(staticRoot, cleanPath === "/" ? "index.html" : cleanPath));
 
-  if (!filePath.startsWith(rootDir)) {
+  if (!filePath.startsWith(staticRoot)) {
     response.writeHead(403);
     response.end("Forbidden");
     return;
@@ -2645,6 +2629,9 @@ async function serveStatic(requestPath, response) {
     response.writeHead(200, {
       "Content-Type": mimeTypes[path.extname(filePath).toLowerCase()] || "application/octet-stream",
       "Content-Length": stat.size,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0",
     });
     fs.createReadStream(filePath).pipe(response);
   } catch {

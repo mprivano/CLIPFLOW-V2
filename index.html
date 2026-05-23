@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ClipFlow Studio</title>
+    <title>ClipFlow</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -73,7 +73,7 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">Campaign workspace</p>
-            <h1>Turn long videos into scheduled TikToks, Reels, and YouTube Shorts.</h1>
+            <h1>ClipFlow</h1>
           </div>
           <div class="topbar-actions">
             <span class="status-pill" id="readinessPill">Setup needed</span>
@@ -219,6 +219,35 @@
                 Refresh
               </button>
             </div>
+          </div>
+
+          <!-- Manual Upload to Drive -->
+          <div class="panel-sub-card" style="background: var(--panel-strong); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px;">
+            <form id="manualUploadForm" style="display: flex; flex-direction: column; gap: 12px;">
+              <h3 style="font-size: 1rem; font-weight: 700; color: var(--ink); margin: 0; border-bottom: 1px solid var(--line); padding-bottom: 8px;">Manual Upload to Drive</h3>
+              <p style="font-size: 0.8rem; color: var(--muted); margin: 0;">Upload a video and its transcript directly to your connected Google Drive account.</p>
+              <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px;">
+                <label class="field" style="margin: 0;">
+                  <span>Video Title</span>
+                  <input id="manualUploadTitle" type="text" placeholder="Enter a title for the video" required>
+                </label>
+                <label class="field" style="margin: 0;">
+                  <span>Virality Score</span>
+                  <input id="manualUploadScore" type="number" min="0" max="100" placeholder="e.g. 95" required>
+                </label>
+              </div>
+              <label class="field" style="margin: 0;">
+                <span>Video File</span>
+                <input id="manualUploadVideo" type="file" accept="video/mp4,video/quicktime" required>
+              </label>
+              <label class="field" style="margin: 0;">
+                <span>Transcript Text</span>
+                <textarea id="manualUploadTranscriptText" rows="4" placeholder="Paste the full transcript text here..." style="width: 100%; resize: vertical; background: var(--panel-strong); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 0.85rem;"></textarea>
+              </label>
+              <button type="submit" class="primary-button" style="align-self: flex-end; margin-top: 4px;">
+                Upload to Google Drive
+              </button>
+            </form>
           </div>
           <div class="library-list" id="vizardLibrary"></div>
         </section>
