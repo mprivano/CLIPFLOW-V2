@@ -145,6 +145,13 @@ const elements = {
   directTikTokToken: document.querySelector("#directTikTokToken"),
   cancelDirectTikTok: document.querySelector("#cancelDirectTikTok"),
   saveDirectTikTok: document.querySelector("#saveDirectTikTok"),
+  toggleTelegramBtn: document.querySelector("#toggleTelegramBtn"),
+  telegramForm: document.querySelector("#telegramForm"),
+  telegramBotToken: document.querySelector("#telegramBotToken"),
+  telegramChatId: document.querySelector("#telegramChatId"),
+  telegramHandle: document.querySelector("#telegramHandle"),
+  cancelTelegram: document.querySelector("#cancelTelegram"),
+  saveTelegram: document.querySelector("#saveTelegram"),
   optimizationListContainer: document.querySelector("#optimizationListContainer"),
   runAuditBtn: document.querySelector("#runAuditBtn"),
   optTabContent: document.querySelector("#optTabContent"),
@@ -412,6 +419,13 @@ elements.accountList.addEventListener("click", (event) => {
     return;
   }
 
+  if (action.dataset.accountAction === "remove-telegram") {
+    state.accounts = state.accounts.filter(item => item.id !== action.dataset.accountId);
+    saveAndRender();
+    setClipStatus("Telegram bot removed successfully.", "ready");
+    return;
+  }
+
   const account = state.accounts.find((item) => item.id === action.dataset.accountId);
   if (!account) return;
 
@@ -499,6 +513,65 @@ if (elements.saveDirectTikTok && elements.directTikTokForm) {
     if (defaultRadio) defaultRadio.checked = true;
 
     setClipStatus(`Direct TikTok account ${username} added successfully!`, "ready");
+  });
+}
+
+if (elements.toggleTelegramBtn && elements.telegramForm) {
+  elements.toggleTelegramBtn.addEventListener("click", () => {
+    const isHidden = elements.telegramForm.style.display === "none";
+    elements.telegramForm.style.display = isHidden ? "block" : "none";
+  });
+}
+
+if (elements.cancelTelegram && elements.telegramForm) {
+  elements.cancelTelegram.addEventListener("click", () => {
+    elements.telegramForm.style.display = "none";
+    elements.telegramBotToken.value = "";
+    elements.telegramChatId.value = "";
+    elements.telegramHandle.value = "";
+  });
+}
+
+if (elements.saveTelegram && elements.telegramForm) {
+  elements.saveTelegram.addEventListener("click", () => {
+    const botToken = elements.telegramBotToken.value.trim();
+    const chatId = elements.telegramChatId.value.trim();
+    let handle = elements.telegramHandle.value.trim();
+
+    if (!botToken || !chatId) {
+      setClipStatus("Please enter both Bot Token and Chat ID.", "error");
+      return;
+    }
+
+    if (!handle) {
+      handle = "@telegram_bot";
+    }
+
+    const newAccount = {
+      id: `telegram-${Date.now()}`,
+      platform: "Telegram",
+      handle: handle,
+      audience: "Send to Phone Bot",
+      connected: true,
+      enabled: true,
+      review: `Ready. Chat ID: ${chatId}`,
+      gate: "ready",
+      provider: "telegram",
+      telegramBotToken: botToken,
+      telegramChatId: chatId,
+    };
+
+    if (!state.accounts) state.accounts = [];
+    state.accounts.push(newAccount);
+    saveAndRender();
+
+    // Reset Form
+    elements.telegramForm.style.display = "none";
+    elements.telegramBotToken.value = "";
+    elements.telegramChatId.value = "";
+    elements.telegramHandle.value = "";
+
+    setClipStatus(`Telegram account ${handle} added successfully!`, "ready");
   });
 }
 
@@ -978,6 +1051,9 @@ function renderAccounts() {
     if (account.provider === "direct") {
       actionLabel = "Remove";
       actionAttr = `data-account-action="remove-direct" data-account-id="${account.id}"`;
+    } else if (account.provider === "telegram") {
+      actionLabel = "Remove";
+      actionAttr = `data-account-action="remove-telegram" data-account-id="${account.id}"`;
     }
 
     const row = document.createElement("div");
@@ -1163,7 +1239,7 @@ function getFilteredClips() {
 }
 
 function getQueueStatus(account) {
-  if (account.provider === "direct") {
+  if (account.provider === "direct" || account.provider === "telegram") {
     if (!account.connected) {
       return { label: "Reconnect", type: "blocked" };
     }
@@ -1682,6 +1758,8 @@ function createPublishJob(clip, account) {
     provider: account.provider || "vizard",
     directMode: account.directMode || "assistant",
     directToken: account.directToken || "",
+    telegramBotToken: account.telegramBotToken || "",
+    telegramChatId: account.telegramChatId || "",
     post: clip.caption || clip.title || "",
     title: clip.title || clip.caption || "Short video",
     status: missingClipId ? "Video source needed" : accountStatus.label,
@@ -1799,6 +1877,29 @@ async function publishJob(job) {
     return;
   }
 
+  if (job.provider === "telegram") {
+    const response = await fetch(apiUrl("/api/telegram/publish"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        videoUrl: finalVideoUrl,
+        post: job.post,
+        title: job.title,
+        handle: job.handle,
+        telegramBotToken: job.telegramBotToken || "",
+        telegramChatId: job.telegramChatId || "",
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || "Telegram publishing failed.");
+    }
+    return;
+  }
+
   if (job.provider === "direct") {
     const response = await fetch(apiUrl("/api/tiktok/publish"), {
       method: "POST",
@@ -1903,7 +2004,7 @@ function formatVizardExpiry(expiresAt) {
 }
 
 function isPublishReadyAccount(account) {
-  if (account.provider === "direct") {
+  if (account.provider === "direct" || account.provider === "telegram") {
     return Boolean(account.connected && account.gate === "ready");
   }
   return Boolean(account.vizardSocialAccountId && account.connected && account.gate === "ready");

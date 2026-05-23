@@ -125,6 +125,12 @@ async function start() {
         return;
       }
 
+      if (url.pathname === "/api/telegram/publish" && request.method === "POST") {
+        const result = await handleTelegramPublishRequest(request);
+        sendJson(response, result);
+        return;
+      }
+
       if (url.pathname === "/api/delete-media" && request.method === "POST") {
         const result = await handleDeleteMediaRequest(request);
         sendJson(response, result);
@@ -767,6 +773,119 @@ async function handleTikTokPublishRequest(request: any) {
         handle,
       }
     };
+  }
+}
+
+async function handleTelegramPublishRequest(request: any) {
+  const body = await readJsonRequest(request);
+  const videoUrl = String(body.videoUrl || "").trim();
+  const post = String(body.post || "").trim();
+  const title = String(body.title || "").trim();
+  const handle = String(body.handle || "").trim();
+  const telegramBotToken = String(body.telegramBotToken || "").trim();
+  const telegramChatId = String(body.telegramChatId || "").trim();
+
+  if (!videoUrl) {
+    throw new Error("No video URL provided for Telegram delivery.");
+  }
+  if (!telegramBotToken || !telegramChatId) {
+    throw new Error("Telegram bot token and chat ID are required.");
+  }
+
+  console.log(`Telegram Bot - Preparing dispatch to Chat ID: ${telegramChatId}. Video source: ${videoUrl}`);
+
+  // 1. Retrieve the video as a Buffer (using local filesystem path optimization when possible)
+  let videoBuffer: Buffer;
+  try {
+    videoBuffer = await getVideoBuffer(videoUrl);
+  } catch (err: any) {
+    throw new Error(`Could not download or retrieve video clip: ${err.message || err}`);
+  }
+
+  const fileSize = videoBuffer.byteLength;
+  console.log(`Telegram Bot - Video downloaded/loaded. Size: ${(fileSize / (1024 * 1024)).toFixed(2)} MB`);
+
+  // 2. Dispatch to Telegram Bot API (sendVideo) using Native FormData
+  try {
+    const formData = new FormData();
+    formData.append("chat_id", telegramChatId);
+    
+    // Slicing caption at 1000 characters to prevent Telegram's 1024-char limit rejection
+    const captionText = post.slice(0, 1000);
+    formData.append("caption", captionText);
+    
+    // We name the file matching the clean clip title or falling back
+    const cleanFileName = safeFilename(title ? `${title}.mp4` : "clip.mp4");
+    const videoBlob = new Blob([videoBuffer], { type: "video/mp4" });
+    
+    formData.append("video", videoBlob, cleanFileName);
+
+    const tgRes = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendVideo`, {
+      method: "POST",
+      body: formData,
+    });
+
+    const tgData: any = await tgRes.json().catch(() => ({}));
+    if (!tgRes.ok || !tgData.ok) {
+      const description = tgData.description || tgRes.statusText;
+      throw new Error(`Telegram error description: "${description}"`);
+    }
+
+    console.log(`Telegram Bot - Dispatch delivered successfully! Message ID: ${tgData.result?.message_id}`);
+    return {
+      ok: true,
+      message: "Video and caption successfully sent to your Telegram!",
+      messageId: tgData.result?.message_id,
+      handle,
+    };
+  } catch (apiErr: any) {
+    console.error("Telegram Bot API send error:", apiErr);
+    throw new Error(`Telegram server delivery rejected: ${apiErr.message || apiErr}`);
+  }
+}
+
+async function getVideoBuffer(videoUrl: string): Promise<Buffer> {
+  // If it's a local clip served by our server
+  if (videoUrl.includes("/media/")) {
+    try {
+      const mediaPathPart = videoUrl.substring(videoUrl.indexOf("/media/"));
+      const localPath = path.normalize(path.join(rootDir, mediaPathPart));
+      if (fs.existsSync(localPath)) {
+        console.log(`getVideoBuffer - Reading direct local disk file: ${localPath}`);
+        return await fsp.readFile(localPath);
+      }
+    } catch (err) {
+      console.warn(`getVideoBuffer - Local disk file read fallback to fetch...`, err);
+    }
+  }
+
+  // If it's a Google Drive proxied clip with query parameters
+  if (videoUrl.includes("url=") && videoUrl.includes("token=")) {
+    console.log("getVideoBuffer - Downloading proxied Google Drive file...");
+    const parsedUrl = new URL(videoUrl);
+    const targetUrl = parsedUrl.searchParams.get("url") || "";
+    const token = parsedUrl.searchParams.get("token") || "";
+
+    const fetchHeaders: any = {};
+    if (token) {
+      fetchHeaders["Authorization"] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(targetUrl, { headers: fetchHeaders });
+    if (!response.ok) {
+      throw new Error(`Google Drive proxy request failed with status ${response.status}`);
+    }
+    const arrayBuf = await response.arrayBuffer();
+    return Buffer.from(arrayBuf);
+  } else {
+    // Standard external URL (e.g. public Vizard video URL)
+    console.log(`getVideoBuffer - Downloading external video: ${videoUrl}`);
+    const response = await fetch(videoUrl);
+    if (!response.ok) {
+      throw new Error(`Fetch downloaded video hit status ${response.status}`);
+    }
+    const arrayBuf = await response.arrayBuffer();
+    return Buffer.from(arrayBuf);
   }
 }
 

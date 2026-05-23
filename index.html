@@ -233,6 +233,9 @@
               <button class="mini-button animate-subtle" id="toggleDirectTikTokBtn" type="button" style="background-color: #25f4f1; color: #000; border: none; font-weight: 600;" title="Link TikTok Direct API bypass Vizard">
                 + Direct TikTok
               </button>
+              <button class="mini-button animate-subtle" id="toggleTelegramBtn" type="button" style="background-color: #24a1de; color: #fff; border: none; font-weight: 600; margin-left: 6px;" title="Send clips straight to your phone via Telegram Bot">
+                + Telegram
+              </button>
               <a class="mini-button" href="https://vizard.ai/settings/social-accounts" target="_blank" rel="noreferrer">Link</a>
               <button class="icon-button" id="syncAccounts" type="button" title="Sync Vizard accounts">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.8 6.8A7.5 7.5 0 0 1 19.5 12H22l-3.5 3.5L15 12h2.5a5.5 5.5 0 0 0-9.4-3.9L6.8 6.8Zm10.4 10.4A7.5 7.5 0 0 1 4.5 12H2l3.5-3.5L9 12H6.5a5.5 5.5 0 0 0 9.4 3.9l1.3 1.3Z"></path></svg>
@@ -278,6 +281,39 @@
               <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px;">
                 <button type="button" class="mini-button" id="cancelDirectTikTok" style="background: transparent; border: 1px solid var(--line); color: #fff; padding: 4px 8px;">Cancel</button>
                 <button type="button" class="mini-button" id="saveDirectTikTok" style="background: #25f4f1; color: #000; border: none; font-weight: 600; padding: 4px 8px;">Link Creator Channel</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Telegram Expandable Connection Form -->
+          <div id="telegramForm" class="panel-sub-card" style="display: none; background: rgba(36, 161, 222, 0.05); border: 1px solid rgba(36, 161, 222, 0.3); padding: 12px; border-radius: var(--radius); margin-bottom: 12px; font-size: 13px;">
+            <p style="margin: 0 0 8px 0; font-weight: 600; color: #24a1de;">Connect Telegram Bot (Send video + caption to phone)</p>
+            <div style="display: grid; gap: 10px;">
+              <p style="margin: 0; font-size: 11px; color: var(--muted); line-height: 1.4;">
+                This sends video files & captions instantly to your Telegram chat so you can save videos and copy captions directly on your mobile device!
+              </p>
+              
+              <label class="field" style="margin: 0;">
+                <span style="font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; display: block;">Bot Token (from @BotFather)</span>
+                <input id="telegramBotToken" type="password" placeholder="e.g. 123456789:ABCdefGhI_klm..." style="background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: #fff; padding: 6px 10px; border-radius: 4px; width: 100%;">
+              </label>
+
+              <label class="field" style="margin: 0;">
+                <span style="font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; display: block;">Your Chat ID or Channel Username</span>
+                <input id="telegramChatId" type="text" placeholder="e.g. 123456789 or @mychannels" style="background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: #fff; padding: 6px 10px; border-radius: 4px; width: 100%;">
+                <span style="font-size: 10px; color: var(--muted); display: block; margin-top: 2px;">
+                  Tip: Get Chat ID from <b>@userinfobot</b>. Note: Make sure to start the bot (/start) first!
+                </span>
+              </label>
+
+              <label class="field" style="margin: 0;">
+                <span style="font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; display: block;">Channel Name / Handle (For UI list)</span>
+                <input id="telegramHandle" type="text" placeholder="e.g. @my_phone" style="background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: #fff; padding: 6px 10px; border-radius: 4px; width: 100%;">
+              </label>
+
+              <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px;">
+                <button type="button" class="mini-button" id="cancelTelegram" style="background: transparent; border: 1px solid var(--line); color: #fff; padding: 4px 8px;">Cancel</button>
+                <button type="button" class="mini-button" id="saveTelegram" style="background: #24a1de; color: #fff; border: none; font-weight: 600; padding: 4px 8px;">Link Telegram Channel</button>
               </div>
             </div>
           </div>
