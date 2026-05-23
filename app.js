@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+import { getAuth, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 
 const storageKey = "clipflow-studio-state-v1";
 
@@ -10,6 +10,11 @@ let gdriveFiles = [];
 let gdriveFolders = [];
 let isGDriveLoading = false;
 let gdriveError = null;
+let externalGDriveAutoStartUsed = false;
+let gdriveSessionPollId = null;
+let gdriveAuthMode = "oauth";
+let gdriveServiceStatus = null;
+const gdriveServiceTokenSentinel = "__clipflow_service_drive__";
 let systemVizardConfigured = false;
 const liveUploadingClipIds = new Set();
 const destinationPlatforms = ["TikTok", "Instagram", "YouTube Shorts"];
@@ -279,6 +284,22 @@ function handleRouting() {
 
   if (hash === "#studio") {
     if (secStudio) secStudio.style.display = "grid";
+  } else if (hash === "#retrieval") {
+    if (secVizardLibrary) secVizardLibrary.style.display = "flex";
+    try {
+      const mode = document.querySelector("#vizardImportMode");
+      const projectForm = document.querySelector("#vizardProjectForm");
+      const directForm = document.querySelector("#vizardDirectLinkForm");
+      if (mode) {
+        mode.querySelectorAll("button").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.mode === "api");
+        });
+      }
+      if (projectForm) projectForm.style.display = "grid";
+      if (directForm) directForm.style.display = "none";
+      const input = document.querySelector("#vizardProjectInput");
+      if (input && typeof input.focus === "function") input.focus();
+    } catch {}
   } else if (hash === "#vizard-library") {
     if (secVizardLibrary) secVizardLibrary.style.display = "flex";
   } else if (hash === "#accounts") {
@@ -1049,6 +1070,7 @@ function renderQueue() {
       <div class="queue-title">
         <strong>${escapeHtml(job.clipTitle)}</strong>
         <small>${escapeHtml(job.platform)} ${escapeHtml(job.handle)} - ${escapeHtml(job.scheduledFor)}</small>
+        ${job.resultNote ? `<small>${escapeHtml(job.resultNote)}</small>` : ""}
         ${job.error ? `<small class="queue-error">${escapeHtml(job.error)}</small>` : ""}
       </div>
       <span class="queue-status ${job.statusType}">${escapeHtml(job.status)}</span>
@@ -1353,10 +1375,19 @@ async function refreshVizardLibrary() {
 
 async function importVizardProjectFromInput() {
   if (!elements.vizardProjectInput) return;
-  const projectId = extractVizardProjectId(elements.vizardProjectInput.value);
+  const inputValue = String(elements.vizardProjectInput.value || "").trim();
+  const projectId = extractVizardProjectId(inputValue);
 
   if (!projectId) {
-    setClipStatus("Paste a numeric Vizard project ID or a Vizard project URL.", "error");
+    const looksLikeInviteLink =
+      /vizard\.ai\/project/i.test(inputValue) &&
+      /invite=/i.test(inputValue);
+    setClipStatus(
+      looksLikeInviteLink
+        ? "That Vizard share link does not include a numeric project ID. Paste the numeric Project ID to retrieve clips."
+        : "Paste a numeric Vizard project ID or a Vizard URL that includes projectId.",
+      "error",
+    );
     return;
   }
 
@@ -1585,7 +1616,12 @@ async function publishApprovedClips() {
 function createPublishJob(clip, account) {
   const accountStatus = getQueueStatus(account);
   const missingClipId = !clip.vizardVideoId && !clip.videoUrl;
-  const blocked = accountStatus.type === "blocked" || missingClipId;
+  const vizardNeedsSource = (account.provider || "vizard") !== "direct" && !clip.vizardVideoId;
+  const gdriveClipForVizard = vizardNeedsSource && clip.provider === "gdrive";
+  const blocked = accountStatus.type === "blocked" || missingClipId || gdriveClipForVizard;
+  const blockedReason = gdriveClipForVizard
+    ? "Google Drive clips must use Direct TikTok publish (not Vizard fallback)."
+    : (missingClipId ? "Video source needed" : accountStatus.label);
 
   return {
     id: createId("job"),
@@ -1601,9 +1637,10 @@ function createPublishJob(clip, account) {
     directToken: account.directToken || "",
     post: clip.caption || clip.title || "",
     title: clip.title || clip.caption || "Short video",
-    status: missingClipId ? "Video source needed" : accountStatus.label,
+    status: blockedReason,
     statusType: blocked ? "blocked" : "ready",
     scheduledFor: "Now",
+    resultNote: "",
   };
 }
 
@@ -1713,10 +1750,15 @@ async function publishJob(job) {
       window.open("https://www.tiktok.com/upload", "_blank");
     });
 
+    job.resultNote = "Opened TikTok uploader and downloaded clip locally.";
     return;
   }
 
   if (job.provider === "direct") {
+    job.status = "Uploading to TikTok API";
+    job.statusType = "waiting";
+    saveAndRender();
+
     const response = await fetch(apiUrl("/api/tiktok/publish"), {
       method: "POST",
       headers: {
@@ -1735,8 +1777,16 @@ async function publishJob(job) {
     if (!response.ok) {
       throw new Error(data.error || "TikTok Direct Publishing failed.");
     }
+
+    job.resultNote = data.sandbox
+      ? `Sandbox publish simulated (${data.publishId || "no id"}).`
+      : `TikTok accepted upload (${data.publishId || "publish queued"}).`;
     return;
   }
+
+  job.status = "Publishing via Vizard";
+  job.statusType = "waiting";
+  saveAndRender();
 
   const response = await fetch(apiUrl("/api/vizard/publish"), {
     method: "POST",
@@ -1755,6 +1805,10 @@ async function publishJob(job) {
 
   if (!response.ok) {
     throw new Error(data.error || "Vizard could not publish this post.");
+  }
+
+  if (data.vizardVideoId) {
+    job.resultNote = `Vizard publish ID ${data.vizardVideoId}`;
   }
 
   if (data.vizardVideoId && job.clipId) {
@@ -2087,6 +2141,233 @@ function apiUrl(pathname) {
   return pathname;
 }
 
+function isServiceDriveMode() {
+  return gdriveAuthMode === "service";
+}
+
+function hasGDriveConnection() {
+  return isServiceDriveMode()
+    ? Boolean(gdriveServiceStatus?.connected)
+    : Boolean(googleUser && cachedAccessToken);
+}
+
+async function loadGDriveServiceStatus(options = {}) {
+  try {
+    const response = await fetch(apiUrl("/api/drive/service-status"), { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Could not check Google Drive service mode.");
+    }
+
+    gdriveServiceStatus = data || {};
+    const serviceConnected = data.mode === "service" && data.connected;
+    gdriveAuthMode = serviceConnected ? "service" : "oauth";
+
+    if (!serviceConnected) {
+      if (cachedAccessToken === gdriveServiceTokenSentinel) {
+        cachedAccessToken = null;
+        googleUser = null;
+      }
+      if (data.configured && data.message) {
+        gdriveError = data.message;
+      }
+      return false;
+    }
+
+    googleUser = {
+      displayName: data.displayName || "Workspace Google Drive",
+      email: data.email || "",
+      uid: "service-google-drive",
+      photoURL: "",
+    };
+    cachedAccessToken = gdriveServiceTokenSentinel;
+    gdriveError = null;
+    isSigningIn = false;
+
+    const defaultFolderId = data.defaultFolderId || "root";
+    state.preferences = state.preferences || { autoGDriveBackup: true };
+    if (!state.preferences.gdriveFolderId) {
+      state.preferences.gdriveFolderId = defaultFolderId;
+      state.preferences.gdriveFolderName = defaultFolderId === "root" ? "Entire Drive Root" : "Workspace Folder";
+    }
+
+    if (options.loadFiles !== false) {
+      await triggerGDriveLoad();
+    } else {
+      renderGDrive();
+    }
+    return true;
+  } catch (err) {
+    if (options.throwOnFailure) {
+      throw err;
+    }
+    return false;
+  }
+}
+
+function isExternalGDriveAuthMode() {
+  return new URLSearchParams(window.location.search).has("externalAuth");
+}
+
+function isBrowserGoogleDriveAuthMode() {
+  return new URLSearchParams(window.location.search).has("browserAuth");
+}
+
+function shouldAutoStartExternalGDriveAuth() {
+  const params = new URLSearchParams(window.location.search);
+  return params.has("externalAuth") && params.has("startGoogle");
+}
+
+function clearExternalGDriveAutoStartFlag() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("startGoogle")) return;
+  url.searchParams.delete("startGoogle");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+async function openGDriveInExternalBrowser() {
+  const response = await fetch(apiUrl("/api/open-google-drive-browser"), {
+    method: "POST",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Could not open Google sign-in in Comet.");
+  }
+  return data;
+}
+
+async function loadGoogleDriveSession(options = {}) {
+  if (isServiceDriveMode()) {
+    return true;
+  }
+
+  const response = await fetch(apiUrl("/api/google-drive-session"));
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Could not check Google Drive session.");
+  }
+  if (!data.connected || !data.accessToken) return false;
+
+  cachedAccessToken = data.accessToken;
+  googleUser = data.user || googleUser;
+  localStorage.setItem("clipflow_gdrive_access_token", cachedAccessToken);
+  localStorage.setItem("clipflow_google_user", JSON.stringify(googleUser || {}));
+  localStorage.setItem("clipflow_gdrive_token_timestamp", Date.now().toString());
+  gdriveError = null;
+  renderGDrive();
+
+  if (options.loadFiles !== false) {
+    await triggerGDriveLoad();
+  }
+  return true;
+}
+
+async function saveGoogleDriveSession(accessToken, user) {
+  const response = await fetch(apiUrl("/api/google-drive-session"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      accessToken,
+      user: {
+        displayName: user?.displayName || "",
+        email: user?.email || "",
+        uid: user?.uid || "",
+        photoURL: user?.photoURL || "",
+      },
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Could not save Google Drive session.");
+  }
+  return data;
+}
+
+async function clearGoogleDriveSession() {
+  await fetch(apiUrl("/api/google-drive-session"), { method: "DELETE" }).catch(() => {});
+}
+
+function startGoogleDriveSessionPolling() {
+  if (isServiceDriveMode()) return;
+  if (gdriveSessionPollId) {
+    window.clearInterval(gdriveSessionPollId);
+  }
+
+  let attempts = 0;
+  gdriveSessionPollId = window.setInterval(async () => {
+    attempts += 1;
+    try {
+      const connected = await loadGoogleDriveSession({ loadFiles: true });
+      if (connected) {
+        window.clearInterval(gdriveSessionPollId);
+        gdriveSessionPollId = null;
+        isSigningIn = false;
+        renderGDrive();
+      }
+    } catch (err) {
+      console.warn("Google Drive session polling error:", err);
+    }
+
+    if (attempts >= 60 && gdriveSessionPollId) {
+      window.clearInterval(gdriveSessionPollId);
+      gdriveSessionPollId = null;
+      isSigningIn = false;
+      gdriveError = "Google sign-in did not finish yet. Complete it in the Comet window, then try again.";
+      renderGDrive();
+    }
+  }, 2000);
+}
+
+async function beginGoogleDriveRedirect() {
+  if (!auth || !provider) {
+    throw new Error("Google sign-in is not ready yet.");
+  }
+  await signInWithRedirect(auth, provider);
+}
+
+async function handleDirectGoogleOAuthReturn() {
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const accessToken = hashParams.get("access_token");
+  if (!accessToken) return false;
+
+  cachedAccessToken = accessToken;
+  let user = {
+    displayName: "Google Drive",
+    email: "",
+    uid: "",
+    photoURL: "",
+  };
+
+  try {
+    const userResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (userResponse.ok) {
+      const profile = await userResponse.json();
+      user = {
+        displayName: profile.name || profile.email || "Google Drive",
+        email: profile.email || "",
+        uid: profile.sub || "",
+        photoURL: profile.picture || "",
+      };
+    }
+  } catch (err) {
+    console.warn("Could not load Google profile:", err);
+  }
+
+  googleUser = user;
+  await saveGoogleDriveSession(accessToken, user);
+  localStorage.setItem("clipflow_gdrive_access_token", cachedAccessToken);
+  localStorage.setItem("clipflow_google_user", JSON.stringify(user));
+  localStorage.setItem("clipflow_gdrive_token_timestamp", Date.now().toString());
+  gdriveError = null;
+  isSigningIn = false;
+  window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}#google-drive`);
+  renderGDrive();
+  await triggerGDriveLoad();
+  return true;
+}
+
 function assetUrl(pathname) {
   if (!pathname) return "";
   if (pathname.startsWith("http") && (pathname.includes("amazonaws.com") || pathname.includes("vizard.ai") || pathname.includes("s3"))) {
@@ -2129,9 +2410,27 @@ function extractVizardProjectId(value) {
   const raw = String(value || "").trim();
   if (/^\d+$/.test(raw)) return raw;
 
+  try {
+    const parsed = new URL(raw);
+    const explicitParams = ["projectId", "project_id", "projectid", "project"];
+    for (const key of explicitParams) {
+      const candidate = String(parsed.searchParams.get(key) || "").trim();
+      if (/^\d+$/.test(candidate)) return candidate;
+    }
+
+    const pathPatterns = [
+      /\/(?:project|projects|workspace|video)\/([0-9]+)(?:[/?#]|$)/i,
+      /\/([0-9]{5,})(?:[/?#]|$)/,
+    ];
+    for (const pattern of pathPatterns) {
+      const match = parsed.pathname.match(pattern);
+      if (match && match[1]) return match[1];
+    }
+  } catch {}
+
   const patterns = [
-    /(?:projectId|project_id|id)=([0-9]+)/i,
-    /\/(?:project|projects|editor|workspace|video)\/([0-9]+)/i,
+    /(?:^|[?&#])(?:projectId|project_id|projectid|project)=([0-9]+)/i,
+    /\/(?:project|projects|workspace|video)\/([0-9]+)(?:[/?#]|$)/i,
     /\/([0-9]{5,})(?:[/?#]|$)/,
   ];
 
@@ -2211,6 +2510,11 @@ let provider = null;
 let firebaseInitializedPromise = null;
 
 async function ensureFirebaseInitialized() {
+  const serviceModeActive = await loadGDriveServiceStatus({ loadFiles: true }).catch(() => false);
+  if (serviceModeActive) {
+    return null;
+  }
+
   if (firebaseInitializedPromise) return firebaseInitializedPromise;
 
   firebaseInitializedPromise = (async () => {
@@ -2228,13 +2532,37 @@ async function ensureFirebaseInitialized() {
         prompt: "select_account"
       });
 
+      const directOAuthHandled = await handleDirectGoogleOAuthReturn();
+      if (directOAuthHandled) return;
+
+      const redirectResult = await getRedirectResult(auth);
+      const redirectCredential = redirectResult ? GoogleAuthProvider.credentialFromResult(redirectResult) : null;
+      if (redirectResult?.user && redirectCredential?.accessToken) {
+        cachedAccessToken = redirectCredential.accessToken;
+        googleUser = redirectResult.user;
+        await saveGoogleDriveSession(cachedAccessToken, googleUser);
+        localStorage.setItem("clipflow_gdrive_access_token", cachedAccessToken);
+        localStorage.setItem("clipflow_google_user", JSON.stringify({
+          displayName: googleUser.displayName,
+          email: googleUser.email,
+          uid: googleUser.uid,
+          photoURL: googleUser.photoURL
+        }));
+        localStorage.setItem("clipflow_gdrive_token_timestamp", Date.now().toString());
+        gdriveError = null;
+        triggerGDriveLoad().catch(e => console.warn("Background GDrive loading error after redirect:", e));
+      }
+
+      await loadGoogleDriveSession({ loadFiles: false }).catch(() => false);
+
       onAuthStateChanged(auth, async (user) => {
         if (user) {
           googleUser = user;
+          const serverSessionLoaded = await loadGoogleDriveSession({ loadFiles: false }).catch(() => false);
           const storedToken = localStorage.getItem("clipflow_gdrive_access_token");
           const storedUser = localStorage.getItem("clipflow_google_user");
           const storedTimestamp = localStorage.getItem("clipflow_gdrive_token_timestamp");
-          if (storedToken && storedUser && storedTimestamp) {
+          if (!serverSessionLoaded && storedToken && storedUser && storedTimestamp) {
             const ageMs = Date.now() - parseInt(storedTimestamp, 10);
             if (ageMs < 50 * 60 * 1000) {
               cachedAccessToken = storedToken;
@@ -2249,10 +2577,13 @@ async function ensureFirebaseInitialized() {
             }
           }
         } else {
-          googleUser = null;
-          cachedAccessToken = null;
-          gdriveFiles = [];
-          gdriveError = null;
+          const serverSessionLoaded = await loadGoogleDriveSession({ loadFiles: false }).catch(() => false);
+          if (!serverSessionLoaded) {
+            googleUser = null;
+            cachedAccessToken = null;
+            gdriveFiles = [];
+            gdriveError = null;
+          }
         }
         renderGDrive();
       });
@@ -2267,7 +2598,27 @@ async function ensureFirebaseInitialized() {
 }
 
 // Start background initialization instantly
-ensureFirebaseInitialized().catch(err => {
+async function maybeStartExternalGDriveLogin() {
+  if (externalGDriveAutoStartUsed || !shouldAutoStartExternalGDriveAuth()) return;
+  externalGDriveAutoStartUsed = true;
+  clearExternalGDriveAutoStartFlag();
+  try {
+    isSigningIn = true;
+    renderGDrive();
+    await beginGoogleDriveRedirect();
+  } catch (err) {
+    console.error("Google redirect error:", err);
+    isSigningIn = false;
+    gdriveError = err.message || "Google sign-in failed.";
+    renderGDrive();
+  }
+}
+
+ensureFirebaseInitialized().then(() => {
+  if (!isServiceDriveMode()) {
+    maybeStartExternalGDriveLogin();
+  }
+}).catch(err => {
   console.error("Background Firebase initialization failed:", err);
 });
 
@@ -2375,6 +2726,11 @@ async function getOrCreateGDriveSubFolder(folderName, parentFolderId) {
 }
 
 async function uploadClipToGoogleDrive(clip) {
+  if (isServiceDriveMode()) {
+    setClipStatus("Google Drive auto-backup is disabled in workspace service mode.", "error");
+    return;
+  }
+
   if (!cachedAccessToken) {
     setClipStatus("Please sign in to Google Drive under the Google Drive tab first!", "error");
     location.hash = "#google-drive";
@@ -2546,6 +2902,7 @@ async function uploadClipToGoogleDrive(clip) {
 
 function triggerAutoBackupToGoogleDrive(clips) {
   state.preferences = state.preferences || { autoGDriveBackup: true };
+  if (isServiceDriveMode()) return;
   if (!state.preferences?.autoGDriveBackup || !cachedAccessToken) return;
 
   state.gdriveBackedUpUrls = state.gdriveBackedUpUrls || [];
@@ -2584,6 +2941,16 @@ async function getOrFetchGDriveMetadata(fileId) {
 }
 
 async function fetchGDriveFiles() {
+  if (isServiceDriveMode()) {
+    const parentId = (state.preferences && state.preferences.gdriveFolderId) || (gdriveServiceStatus?.defaultFolderId || "root");
+    const response = await fetch(apiUrl(`/api/drive/files?folderId=${encodeURIComponent(parentId)}`), { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Could not load files from Google Drive.");
+    }
+    return Array.isArray(data.files) ? data.files : [];
+  }
+
   if (!cachedAccessToken) {
     throw new Error("No active Google Drive access token. Please sign in.");
   }
@@ -2695,6 +3062,15 @@ async function fetchGDriveFiles() {
 }
 
 async function fetchGDriveFolders() {
+  if (isServiceDriveMode()) {
+    const response = await fetch(apiUrl("/api/drive/folders?parentId=root"), { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Could not load folders from Google Drive.");
+    }
+    return Array.isArray(data.folders) ? data.folders : [];
+  }
+
   if (!cachedAccessToken) return [];
   try {
     const q = "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
@@ -2717,6 +3093,26 @@ async function fetchGDriveFolders() {
 }
 
 async function createGDriveFolder(folderName) {
+  if (isServiceDriveMode()) {
+    const parentId = (state.preferences && state.preferences.gdriveFolderId) || (gdriveServiceStatus?.defaultFolderId || "root");
+    const response = await fetch(apiUrl("/api/drive/folders"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: folderName,
+        parentId,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.folder?.id) {
+      throw new Error(data.error || "Could not create Google Drive folder.");
+    }
+    return {
+      id: data.folder.id,
+      name: data.folder.name || folderName,
+    };
+  }
+
   if (!cachedAccessToken) {
     throw new Error("Log in required to create folders.");
   }
@@ -2751,25 +3147,36 @@ async function createGDriveFolder(folderName) {
 async function renderGDrive() {
   if (!elements.gdriveContainer) return;
 
+  const connected = hasGDriveConnection();
+
   // Toggle visibility of panel heading actions
-  if (googleUser && cachedAccessToken) {
+  if (connected) {
     if (elements.refreshGDrive) elements.refreshGDrive.style.display = "inline-flex";
-    if (elements.gdriveLogout) elements.gdriveLogout.style.display = "inline-flex";
+    if (elements.gdriveLogout) {
+      elements.gdriveLogout.style.display = isServiceDriveMode() ? "none" : "inline-flex";
+    }
   } else {
     if (elements.refreshGDrive) elements.refreshGDrive.style.display = "none";
     if (elements.gdriveLogout) elements.gdriveLogout.style.display = "none";
   }
 
   // If no auth, show standard Sign-In screen
-  if (!googleUser || !cachedAccessToken) {
+  if (!connected) {
+    const buttonText = isSigningIn ? "Opening Google..." : "Sign in with Google";
+    const helperText = gdriveServiceStatus?.configured && !gdriveServiceStatus?.connected
+      ? "Workspace Drive mode is configured but not ready yet. Fix the service account key and reload."
+      : isBrowserGoogleDriveAuthMode()
+        ? "Sign in with Google to connect Drive in this browser."
+        : "Google Drive connection is completed in your system browser for reliability.";
     elements.gdriveContainer.innerHTML = `
       <div class="empty-state" style="padding: 40px 16px; text-align: center;">
         <div aria-hidden="true" style="margin-bottom: 16px; font-size: 3rem;">📂</div>
         <h3>Access Synced Videos</h3>
         <p style="margin-bottom: 24px; color: var(--muted); max-width: 440px; margin-left: auto; margin-right: auto;">
-          Connect Google Drive to access all Mp4 videos synced from Vizard directly inside ClipFlow, without having to leave the app!
+          ${helperText}
         </p>
-        <button class="gsi-material-button" id="gdriveLoginBtn" type="button" style="align-self: center; background-color: white; border: 1px solid #747775; border-radius: 4px; box-sizing: border-box; color: #1f1f1f; cursor: pointer; font-family: 'Open Sans', arial, sans-serif; font-size: 14px; font-weight: 500; height: 40px; justify-content: center; letter-spacing: 0.25px; outline: none; overflow: hidden; padding: 0 12px; position: relative; text-align: center; transition: background-color .218s, border-color .218s, box-shadow .218s; user-select: none; width: auto; display: inline-flex; align-items: center; gap: 8px;">
+        ${gdriveError ? `<div class="status-note warning" style="margin: 0 auto 16px; max-width: 520px;">${escapeHtml(gdriveError)}</div>` : ""}
+        <button class="gsi-material-button" id="gdriveLoginBtn" type="button" ${isSigningIn ? "disabled" : ""} style="align-self: center; background-color: white; border: 1px solid #747775; border-radius: 4px; box-sizing: border-box; color: #1f1f1f; cursor: pointer; font-family: 'Open Sans', arial, sans-serif; font-size: 14px; font-weight: 500; height: 40px; justify-content: center; letter-spacing: 0.25px; outline: none; overflow: hidden; padding: 0 12px; position: relative; text-align: center; transition: background-color .218s, border-color .218s, box-shadow .218s; user-select: none; width: auto; display: inline-flex; align-items: center; gap: 8px;">
           <div class="gsi-material-button-icon" style="height: 20px; min-width: 20px; width: 20px; display: flex; align-items: center; justify-content: center;">
             <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" style="display: block; width: 20px; height: 20px;">
               <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
@@ -2778,12 +3185,18 @@ async function renderGDrive() {
               <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
             </svg>
           </div>
-          <span class="gsi-material-button-contents">Sign in with Google</span>
+          <span class="gsi-material-button-contents">${buttonText}</span>
         </button>
       </div>
     `;
     const btn = elements.gdriveContainer.querySelector("#gdriveLoginBtn");
-    if (btn) btn.addEventListener("click", handleGDriveLogin);
+    if (btn) {
+      const label = btn.querySelector(".gsi-material-button-contents");
+      if (label) {
+        label.textContent = gdriveServiceStatus?.configured && !gdriveServiceStatus?.connected ? "Retry connection" : buttonText;
+      }
+      btn.addEventListener("click", handleGDriveLogin);
+    }
     return;
   }
 
@@ -2818,7 +3231,7 @@ async function renderGDrive() {
           <select id="gdriveFolderSelect" style="background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 0.82rem; height: 35px; width: 100%; outline: none; cursor: pointer;">
             <option value="root" ${currentFolderId === "root" ? "selected" : ""}>📁 Entire Drive (Root)</option>
             ${gdriveFolders.map(folder => `
-              <option value="${escapeHtml(folder.id)}" ${currentFolderId === folder.id ? "selected" : ""}>📁 ${escapeHtml(folder.name)}</option>
+              <option value="${escapeHtml(folder.id)}" ${currentFolderId === folder.id ? "selected" : ""}>${folder.sharedWithMe ? "🤝" : "📁"} ${escapeHtml(folder.name)}${folder.sharedWithMe ? " (Shared)" : ""}</option>
             `).join('')}
           </select>
         </div>
@@ -2876,7 +3289,7 @@ async function renderGDrive() {
         <div aria-hidden="true" style="margin-bottom: 16px; font-size: 3rem;">📂</div>
         <h3>No Video Files Found</h3>
         <p style="color: var(--muted); max-width: 440px; margin-left: auto; margin-right: auto; margin-bottom: 20px;">
-          No MP4 files detected at the top-level of your Google Drive directory. Click the button below to force scan, or verify your Vizard files have synced.
+          No MP4 files were detected in the selected directory. If your videos were shared with this workspace account, choose the shared folder from “Choose Directory”, then scan again.
         </p>
         <button class="primary-button" id="gdriveForceScanBtn" type="button" style="align-self: center;">
           Scan Google Drive
@@ -2889,7 +3302,9 @@ async function renderGDrive() {
     innerHTML = `
       <div class="library-video-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
         ${gdriveFiles.map((file) => {
-          const proxyUrl = `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
+          const proxyUrl = isServiceDriveMode()
+            ? `/api/drive/file/${encodeURIComponent(file.id)}`
+            : `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
           const dateStr = formatProjectDate(file.modifiedTime);
           const sizeCalculated = file.size ? `${(parseInt(file.size) / (1024 * 1024)).toFixed(1)} MB` : "Size unknown";
           
@@ -3052,45 +3467,54 @@ async function handleGDriveLogin() {
   if (isSigningIn) return;
   try {
     isSigningIn = true;
-    await ensureFirebaseInitialized();
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    
-    if (credential && credential.accessToken) {
-      cachedAccessToken = credential.accessToken;
-      googleUser = result.user;
-      
-      localStorage.setItem("clipflow_gdrive_access_token", cachedAccessToken);
-      localStorage.setItem("clipflow_google_user", JSON.stringify({
-        displayName: googleUser.displayName,
-        email: googleUser.email,
-        uid: googleUser.uid,
-        photoURL: googleUser.photoURL
-      }));
-      localStorage.setItem("clipflow_gdrive_token_timestamp", Date.now().toString());
+    gdriveError = null;
+    renderGDrive();
 
-      gdriveError = null;
-      await triggerGDriveLoad();
-      // Auto-upload existing non-backed-up clips in the active list
-      if (state.clips && state.clips.length) {
-        triggerAutoBackupToGoogleDrive(state.clips);
-      }
-    } else {
-      throw new Error("Failed to receive Google access token from popup.");
+    const serviceConnected = await loadGDriveServiceStatus({ loadFiles: true }).catch(() => false);
+    if (serviceConnected) {
+      isSigningIn = false;
+      renderGDrive();
+      return;
     }
+
+    if (gdriveServiceStatus?.configured && !gdriveServiceStatus?.connected && gdriveServiceStatus?.message) {
+      gdriveError = gdriveServiceStatus.message;
+      isSigningIn = false;
+      renderGDrive();
+      return;
+    }
+
+    await ensureFirebaseInitialized();
+    if (!isBrowserGoogleDriveAuthMode()) {
+      await openGDriveInExternalBrowser();
+      isSigningIn = false;
+      gdriveError = "Google Drive opens in your system browser. Complete sign-in there and continue from that browser tab.";
+      renderGDrive();
+      return;
+    }
+    await beginGoogleDriveRedirect();
   } catch (err) {
-    console.error("Popup Error:", err);
+    console.error("Google sign-in error:", err);
     gdriveError = err.message || "Sign in failed.";
     renderGDrive();
   } finally {
-    isSigningIn = false;
+    if (isExternalGDriveAuthMode()) {
+      isSigningIn = false;
+    }
   }
 }
 
 async function handleGDriveLogout() {
+  if (isServiceDriveMode()) {
+    gdriveError = "Workspace Drive mode does not require sign-out.";
+    renderGDrive();
+    return;
+  }
+
   try {
     await ensureFirebaseInitialized();
     await signOut(auth);
+    await clearGoogleDriveSession();
     googleUser = null;
     cachedAccessToken = null;
     gdriveFiles = [];
@@ -3107,7 +3531,7 @@ async function handleGDriveLogout() {
 }
 
 async function triggerGDriveLoad() {
-  if (!cachedAccessToken) return;
+  if (!cachedAccessToken && !isServiceDriveMode()) return;
   isGDriveLoading = true;
   gdriveError = null;
   renderGDrive();
@@ -3121,7 +3545,7 @@ async function triggerGDriveLoad() {
   } catch (err) {
     console.error("GDrive trigger scan error:", err);
     gdriveError = err.message || "Failed to scan Google Drive.";
-    if (err.message && (err.message.includes("401") || err.message.includes("unauthorized"))) {
+    if (!isServiceDriveMode() && err.message && (err.message.includes("401") || err.message.includes("unauthorized"))) {
       cachedAccessToken = null;
       localStorage.removeItem("clipflow_gdrive_access_token");
       localStorage.removeItem("clipflow_google_user");
@@ -3134,7 +3558,9 @@ async function triggerGDriveLoad() {
 }
 
 function handleGDriveImport(file) {
-  const proxyUrl = `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
+  const proxyUrl = isServiceDriveMode()
+    ? `/api/drive/file/${encodeURIComponent(file.id)}`
+    : `/api/proxy-video/${encodeURIComponent(file.name || 'video.mp4')}?url=${encodeURIComponent(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`)}&token=${encodeURIComponent(cachedAccessToken)}`;
   
   let extra = file.extra || null;
   if (!extra || !Object.keys(extra).length) {
@@ -3559,4 +3985,3 @@ if (elements.publishListContainer) {
     }
   });
 }
-

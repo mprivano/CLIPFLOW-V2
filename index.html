@@ -31,16 +31,20 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 10a4 4 0 1 1 8 0 4 4 0 0 1-8 0Zm-3 9a7 7 0 0 1 14 0v1H5v-1Z"></path></svg>
             Accounts
           </a>
-          <a class="nav-item" href="#vizard-library">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v4H4V5Zm0 6h7v8H4v-8Zm9 0h7v8h-7v-8Z"></path></svg>
-            Videos
-          </a>
-          <a class="nav-item" href="#google-drive">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
-            </svg>
-            Google Drive
-          </a>
+	          <a class="nav-item" href="#vizard-library">
+	            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v4H4V5Zm0 6h7v8H4v-8Zm9 0h7v8h-7v-8Z"></path></svg>
+	            Videos
+	          </a>
+	          <a class="nav-item" href="#retrieval">
+	            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 18a8 8 0 1 1 5.293-14.707A8 8 0 0 1 10 18Zm11 3-5.2-5.2 1.4-1.4L22.4 19.6 21 21Z"></path></svg>
+	            Retrieval
+	          </a>
+	          <a class="nav-item" href="#google-drive">
+	            <svg viewBox="0 0 24 24" aria-hidden="true">
+	              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+	            </svg>
+	            Google Drive
+	          </a>
           <a class="nav-item" href="#queue">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v3H5V5Zm0 5h14v3H5v-3Zm0 5h10v3H5v-3Z"></path></svg>
             Queue
@@ -193,21 +197,67 @@
           </section>
         </section>
 
-        <section class="library-section panel" id="vizard-library" style="display: none; flex-direction: column; gap: 14px; min-width: 0;">
-          <div class="panel-heading" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 4px; flex-wrap: wrap; gap: 12px;">
-            <div>
-              <p class="eyebrow">Vizard workspace library</p>
-              <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;">Videos Tab</h2>
-            </div>
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <a class="mini-button" href="https://vizard.ai/projects" target="_blank" rel="noreferrer" style="font-size: 0.75rem; text-decoration: none; padding: 4px 8px;">Workspace Projects ↗</a>
-              <button class="secondary-button" id="refreshVizardLibrary" type="button" style="height: 32px; padding: 0 10px; font-size: 0.75rem; font-weight: 500;">
-                Refresh
-              </button>
-            </div>
-          </div>
-          <div class="library-list" id="vizardLibrary"></div>
-        </section>
+	        <section class="library-section panel" id="vizard-library" style="display: none; flex-direction: column; gap: 14px; min-width: 0;">
+	          <div class="panel-heading" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 4px; flex-wrap: wrap; gap: 12px;">
+	            <div>
+	              <p class="eyebrow">Vizard workspace library</p>
+	              <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;">Videos Tab</h2>
+	            </div>
+	            <div style="display: flex; gap: 8px; align-items: center;">
+	              <a class="mini-button" href="https://vizard.ai/projects" target="_blank" rel="noreferrer" style="font-size: 0.75rem; text-decoration: none; padding: 4px 8px;">Workspace Projects ↗</a>
+	              <button class="secondary-button" id="refreshVizardLibrary" type="button" style="height: 32px; padding: 0 10px; font-size: 0.75rem; font-weight: 500;">
+	                Refresh
+	              </button>
+	            </div>
+	          </div>
+
+	          <div style="background: rgba(30, 41, 59, 0.25); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 12px;">
+	            <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+	              <div style="display: flex; flex-direction: column; gap: 2px;">
+	                <div style="font-weight: 800; color: var(--ink);">Retrieve videos</div>
+	                <div style="font-size: 0.82rem; color: var(--muted); line-height: 1.35;">Paste a Vizard Project ID to bring old clips back into ClipFlow.</div>
+	              </div>
+	              <div class="segmented-control" id="vizardImportMode" aria-label="Vizard import mode" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+	                <button class="active" type="button" data-mode="api">Retrieval</button>
+	                <button type="button" data-mode="link">Direct link</button>
+	              </div>
+	            </div>
+
+	            <form id="vizardProjectForm" style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end;">
+	              <label class="field" style="margin: 0;">
+	                <span>Vizard Project ID or URL</span>
+	                <input id="vizardProjectInput" type="text" inputmode="numeric" placeholder="e.g. 12345678" autocomplete="off">
+	              </label>
+	              <button class="primary-button" type="submit" style="height: 42px; padding: 0 14px; margin: 0; background: #6366f1; border: none; color: white; font-weight: 800;">
+	                Retrieve
+	              </button>
+	            </form>
+
+	            <form id="vizardDirectLinkForm" style="display: none; flex-direction: column; gap: 10px;">
+	              <div class="settings-grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+	                <label class="field" style="margin: 0;">
+	                  <span>Title</span>
+	                  <input id="vizardDirectTitle" type="text" placeholder="My clip title" autocomplete="off">
+	                </label>
+	                <label class="field" style="margin: 0;">
+	                  <span>Video URL</span>
+	                  <input id="vizardDirectUrl" type="url" placeholder="https://..." autocomplete="off">
+	                </label>
+	              </div>
+	              <label class="field" style="margin: 0;">
+	                <span>Caption (optional)</span>
+	                <input id="vizardDirectCaption" type="text" placeholder="#hashtags ..." autocomplete="off">
+	              </label>
+	              <div style="display: flex; justify-content: flex-end;">
+	                <button class="secondary-button" type="submit" style="height: 42px; padding: 0 14px; margin: 0;">
+	                  Add to desk
+	                </button>
+	              </div>
+	            </form>
+	          </div>
+
+	          <div class="library-list" id="vizardLibrary"></div>
+	        </section>
 
         <section class="accounts-section panel" id="accounts">
           <div class="panel-heading">
