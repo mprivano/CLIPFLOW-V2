@@ -11,6 +11,9 @@ let gdriveError = null;
 let gdriveServiceStatus = null;
 let gdriveServiceStatusChecked = false;
 let systemVizardConfigured = false;
+let settingsIntegrationsStatus = null;
+let settingsIntegrationsLoading = false;
+let settingsIntegrationsError = "";
 const liveUploadingClipIds = new Set();
 const destinationPlatforms = ["TikTok", "Instagram", "YouTube Shorts"];
 const localClipperBase = "http://127.0.0.1:5059";
@@ -170,6 +173,7 @@ const elements = {
   settingsSaveBtn: document.querySelector("#settingsSaveBtn"),
   settingsClearCacheBtn: document.querySelector("#settingsClearCacheBtn"),
   settingsCacheSize: document.querySelector("#settingsCacheSize"),
+  settingsIntegrationsStatus: document.querySelector("#settingsIntegrationsStatus"),
   aiScriptboardContainer: document.querySelector("#aiScriptboardContainer"),
   multiVaultContainer: document.querySelector("#multiVaultContainer"),
   manualUploadForm: document.querySelector("#manualUploadForm"),
@@ -5470,6 +5474,120 @@ function renderAnalyticsWorkspace() {
   }
 }
 
+const settingsIntegrationOrder = ["gemini", "openai", "vizard", "googleDrive", "tiktok", "telegram", "appUrl"];
+
+const settingsIntegrationMissingNotes = {
+  gemini: "Add this key to enable Gemini-powered optimization and assistant features.",
+  openai: "Optional fallback for transcription and analysis when Gemini is not available.",
+  vizard: "Required for Vizard project import, clipping, social account sync, and Vizard publishing.",
+  googleDrive: "Add service-account JSON and a Shared Drive folder ID for Workspace Drive uploads.",
+  tiktok: "Real TikTok posting needs a verified app flow and a valid access token; sandbox messages are not real posts.",
+  telegram: "Add a bot token and chat ID, or save bot credentials per account in the Accounts tab.",
+  appUrl: "Set the public app URL used for callbacks, links, and server environment checks.",
+};
+
+function renderSettingsIntegrations() {
+  const container = elements.settingsIntegrationsStatus || document.querySelector("#settingsIntegrationsStatus");
+  if (!container) return;
+
+  if (settingsIntegrationsLoading) {
+    container.innerHTML = `
+      <div class="settings-integrations-state">
+        <span class="queue-status waiting">Loading</span>
+        <p>Checking server integration status from the local backend.</p>
+      </div>
+    `;
+    return;
+  }
+
+  if (settingsIntegrationsError) {
+    container.innerHTML = `
+      <div class="settings-integrations-state error">
+        <span class="queue-status blocked">Error</span>
+        <p>${escapeHtml(settingsIntegrationsError)}</p>
+        <button type="button" class="mini-button" data-settings-action="refresh-integrations">Retry</button>
+      </div>
+    `;
+    bindSettingsIntegrationRefresh(container);
+    return;
+  }
+
+  const integrations = settingsIntegrationsStatus?.integrations || {};
+  if (!Object.keys(integrations).length) {
+    container.innerHTML = `
+      <div class="settings-integrations-state">
+        <span class="queue-status waiting">Waiting</span>
+        <p>No integration status has loaded yet.</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="settings-integrations-grid">
+      ${settingsIntegrationOrder
+        .filter((key) => integrations[key])
+        .map((key) => renderSettingsIntegrationCard(key, integrations[key]))
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSettingsIntegrationCard(key, integration) {
+  const configured = Boolean(integration.configured);
+  const message = String(integration.message || (configured ? "Configured" : "Needs setup"));
+  const pending = !configured && /pending|verification/i.test(message);
+  const badgeLabel = configured ? "Configured" : pending ? "Pending verification" : "Missing";
+  const badgeClass = configured ? "ready" : pending ? "waiting" : "blocked";
+  const helperNote = configured ? "Server reports this integration is ready." : settingsIntegrationMissingNotes[key] || "Add the required environment variables and restart the server.";
+
+  return `
+    <article class="settings-integration-card ${configured ? "configured" : "missing"}">
+      <div class="settings-integration-card-head">
+        <strong>${escapeHtml(integration.label || key)}</strong>
+        <span class="queue-status ${badgeClass}">${escapeHtml(badgeLabel)}</span>
+      </div>
+      <div class="settings-integration-env">${escapeHtml(integration.env || "Server env")}</div>
+      <p>${escapeHtml(message)}</p>
+      <small>${escapeHtml(helperNote)}</small>
+    </article>
+  `;
+}
+
+function bindSettingsIntegrationRefresh(root = document) {
+  const button = root.querySelector("[data-settings-action='refresh-integrations']");
+  if (!button || button.dataset.listenerAttached) return;
+  button.addEventListener("click", () => loadSettingsIntegrationsStatus({ force: true }));
+  button.dataset.listenerAttached = "true";
+}
+
+async function loadSettingsIntegrationsStatus(options = {}) {
+  if (settingsIntegrationsLoading) return;
+  if (!options.force && settingsIntegrationsStatus) {
+    renderSettingsIntegrations();
+    return;
+  }
+
+  settingsIntegrationsLoading = true;
+  settingsIntegrationsError = "";
+  renderSettingsIntegrations();
+
+  try {
+    const response = await fetch(apiUrl("/api/settings/integrations/status"));
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `Settings status failed (${response.status}).`);
+    }
+    settingsIntegrationsStatus = data;
+  } catch (error) {
+    settingsIntegrationsStatus = null;
+    settingsIntegrationsError = error.message || "Could not load integration status. Check that the ClipFlow server is running, then retry.";
+  } finally {
+    settingsIntegrationsLoading = false;
+    renderSettingsIntegrations();
+  }
+}
+
 function renderSettingsWorkspace() {
   state.preferences = state.preferences || {};
   
@@ -5488,6 +5606,10 @@ function renderSettingsWorkspace() {
   if (elements.settingsCacheSize) {
     elements.settingsCacheSize.textContent = state.preferences.cacheCleared ? "0.0 MB" : "150.3 MB";
   }
+
+  renderSettingsIntegrations();
+  bindSettingsIntegrationRefresh(document);
+  loadSettingsIntegrationsStatus();
 
   // Bind Save Button Action
   if (elements.settingsSaveBtn && !elements.settingsSaveBtn.dataset.listenerAttached) {

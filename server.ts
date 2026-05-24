@@ -33,6 +33,12 @@ const ffmpegPath = findBinary("ffmpeg");
 const ffprobePath = findBinary("ffprobe");
 const openaiApiKey = process.env.OPENAI_API_KEY || "";
 const vizardApiKey = process.env.VIZARDAI_API_KEY || "";
+const appUrl = process.env.APP_URL || "";
+const tiktokClientKey = process.env.TIKTOK_CLIENT_KEY || "";
+const tiktokClientSecret = process.env.TIKTOK_CLIENT_SECRET || "";
+const tiktokAccessToken = process.env.TIKTOK_ACCESS_TOKEN || "";
+const envTelegramBotToken = process.env.TELEGRAM_BOT_TOKEN || "";
+const envTelegramChatId = process.env.TELEGRAM_CHAT_ID || "";
 const transcriptionModel = process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
 const analysisModel = process.env.OPENAI_ANALYSIS_MODEL || "gpt-5.4-mini";
 const maxTranscriptionBytes = 24 * 1024 * 1024;
@@ -87,6 +93,12 @@ async function start() {
           transcriptionModel: geminiApiKey ? "gemini-3.5-flash" : transcriptionModel,
           analysisModel: geminiApiKey ? "gemini-3.5-flash" : analysisModel,
         });
+        return;
+      }
+
+      if (url.pathname === "/api/settings/integrations/status" && request.method === "GET") {
+        const result = await getSettingsIntegrationsStatus();
+        sendJson(response, result);
         return;
       }
 
@@ -435,6 +447,70 @@ async function getServiceDriveStatus() {
     displayName: "Workspace Google Drive",
     defaultFolderName: gdriveServiceFolderId && gdriveServiceFolderId !== "root" ? "ClipFlow Workspace" : "Entire Drive Root",
     defaultFolderId: gdriveServiceFolderId || "root",
+  };
+}
+
+async function getSettingsIntegrationsStatus() {
+  const driveCredentials = await getServiceDriveCredentials();
+  const hasDriveFolder = Boolean(gdriveServiceFolderId && gdriveServiceFolderId !== "root");
+  const hasTiktokApp = Boolean(tiktokClientKey && tiktokClientSecret);
+  const hasTiktokAccessToken = Boolean(tiktokAccessToken);
+  const hasTelegramEnv = Boolean(envTelegramBotToken && envTelegramChatId);
+
+  return {
+    ok: true,
+    integrations: {
+      gemini: {
+        configured: Boolean(geminiApiKey),
+        label: "Gemini",
+        env: "GEMINI_API_KEY",
+        message: geminiApiKey ? "Configured" : "Missing GEMINI_API_KEY",
+      },
+      openai: {
+        configured: Boolean(openaiApiKey),
+        label: "OpenAI",
+        env: "OPENAI_API_KEY",
+        message: openaiApiKey ? "Configured" : "Missing OPENAI_API_KEY",
+      },
+      vizard: {
+        configured: Boolean(vizardApiKey),
+        label: "Vizard AI",
+        env: "VIZARDAI_API_KEY",
+        message: vizardApiKey ? "Configured" : "Missing VIZARDAI_API_KEY",
+      },
+      googleDrive: {
+        configured: Boolean(driveCredentials && hasDriveFolder),
+        label: "Google Drive",
+        env: "GDRIVE_SERVICE_ACCOUNT_JSON / GDRIVE_FOLDER_ID",
+        message: !driveCredentials
+          ? "Missing Google Drive service account JSON"
+          : hasDriveFolder
+            ? "Configured"
+            : "Needs GDRIVE_FOLDER_ID for a Shared Drive folder",
+      },
+      tiktok: {
+        configured: hasTiktokAccessToken,
+        label: "TikTok",
+        env: "TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_ACCESS_TOKEN",
+        message: hasTiktokAccessToken
+          ? "Configured"
+          : hasTiktokApp
+            ? "Pending verification: add a valid TikTok access token before real API publishing"
+            : "TikTok credentials missing or incomplete",
+      },
+      telegram: {
+        configured: hasTelegramEnv,
+        label: "Telegram",
+        env: "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID",
+        message: hasTelegramEnv ? "Configured" : "Telegram credentials missing or incomplete",
+      },
+      appUrl: {
+        configured: Boolean(appUrl),
+        label: "App URL",
+        env: "APP_URL",
+        message: appUrl ? "Configured" : "Missing APP_URL",
+      },
+    },
   };
 }
 
@@ -2079,7 +2155,7 @@ async function handleTikTokPublishRequest(request: any) {
   console.log(`TikTok Direct - Video successfully parsed. File size: ${(fileSize / (1024 * 1024)).toFixed(2)} MB`);
 
   // Choose Token
-  const activeToken = directToken || process.env.TIKTOK_ACCESS_TOKEN || "";
+  const activeToken = directToken || tiktokAccessToken || "";
 
   // 2. Perform Real TikTok API call or Sandbox Simulator
   if (activeToken) {
@@ -2178,8 +2254,8 @@ async function handleTelegramPublishRequest(request: any) {
   const post = String(body.post || "").trim();
   const title = String(body.title || "").trim();
   const handle = String(body.handle || "").trim();
-  const telegramBotToken = String(body.telegramBotToken || "").trim();
-  const telegramChatId = String(body.telegramChatId || "").trim();
+  const telegramBotToken = String(body.telegramBotToken || "").trim() || envTelegramBotToken;
+  const telegramChatId = String(body.telegramChatId || "").trim() || envTelegramChatId;
 
   if (!videoUrl) {
     throw new Error("No video URL provided for Telegram delivery.");

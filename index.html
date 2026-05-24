@@ -598,9 +598,15 @@
               </label>
             </div>
 
-            <!-- Credentials switches & backups -->
+            <!-- Server integrations status -->
             <div style="background: var(--panel-strong); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
-              <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--ink); margin-bottom: 4px; border-bottom: 1px dashed var(--line); padding-bottom: 6px;">API & Backup Channels</h3>
+              <div class="settings-integration-heading">
+                <div>
+                  <h3>Account/API Setup</h3>
+                  <p>Credentials are read from the server <code>.env</code> file. Secret values are never shown here.</p>
+                </div>
+                <button type="button" class="mini-button" id="settingsRefreshIntegrationsBtn" data-settings-action="refresh-integrations">Refresh status</button>
+              </div>
 
               <div>
                 <span class="eyebrow" style="margin-bottom: 2px; display: block;">Vizard API Auto Processing</span>
@@ -609,6 +615,8 @@
                   <input type="checkbox" id="settingsAutoVizard" checked style="width: 14px; height: 14px;"> Enable background extraction
                 </label>
               </div>
+
+              <div id="settingsIntegrationsStatus" class="settings-integrations-status" aria-live="polite"></div>
 
               <div>
                 <span class="eyebrow" style="margin-bottom: 2px; display: block;">System Storage & Cache Index</span>
