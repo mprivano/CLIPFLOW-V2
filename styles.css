@@ -884,6 +884,51 @@ svg {
   color: #a63832 !important;
 }
 
+.drive-bin {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: var(--radius);
+  background: rgba(127, 29, 29, 0.16);
+}
+
+.drive-bin-header,
+.drive-bin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drive-bin-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.drive-bin-list {
+  display: grid;
+  gap: 8px;
+}
+
+.drive-bin-row {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.mini-button.danger {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(127, 29, 29, 0.25);
+  color: #fecaca;
+}
+
+.mini-button.danger:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.75);
+  background: rgba(185, 28, 28, 0.32);
+}
+
 .account-controls {
   display: flex;
   align-items: center;

@@ -914,6 +914,7 @@ function createInitialState() {
     accounts: [], // Accounts are loaded and normalized in restoreCredentialVault
     vizardProjects: [],
     queue: [],
+    publishedDriveBin: [],
     vizardApiAccounts: [],
     activeVizardAccountId: "system",
     selectedClipIds: [],
@@ -941,6 +942,7 @@ function loadState() {
         clips,
         vizardProjects: normalizeVizardProjects(saved.vizardProjects || [], clips, saved.source || {}),
         queue: normalizeQueue(saved.queue || []), // Explicitly normalize and load queue
+        publishedDriveBin: normalizePublishedDriveBin(saved.publishedDriveBin || []),
         optimizationStatuses: normalizeOptimizationStatuses(saved.optimizationStatuses, saved.optimizations),
         aiOptimizationItems: normalizeAiOptimizationItems(saved.aiOptimizationItems || []),
         aiOptimizationLoading: false,
@@ -955,6 +957,20 @@ function loadState() {
 
 function normalizeQueue(queue) {
   return Array.isArray(queue) ? queue : [];
+}
+
+function normalizePublishedDriveBin(items) {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => item && (item.gdriveFolderId || item.gdriveFileId))
+    .map((item) => ({
+      id: String(item.id || item.gdriveFolderId || item.gdriveFileId || createId("drivebin")),
+      clipId: String(item.clipId || ""),
+      title: String(item.title || "Published Drive video"),
+      gdriveFolderId: String(item.gdriveFolderId || ""),
+      gdriveFileId: String(item.gdriveFileId || ""),
+      publishedAt: String(item.publishedAt || ""),
+      source: String(item.source || "queue"),
+    }));
 }
 
 function normalizeOptimizationStatuses(statuses, legacyOptimizations = []) {
@@ -1479,6 +1495,7 @@ function renderLibraryVideo(clip, projectId) {
 
 function renderQueue() {
   elements.queueTable.innerHTML = "";
+  renderPublishedDriveBin();
 
   if (!state.queue.length) {
     const row = document.createElement("div");
@@ -1503,6 +1520,44 @@ function renderQueue() {
       <span class="queue-status ${job.statusType}">${escapeHtml(job.status)}</span>
     `;
     elements.queueTable.appendChild(row);
+  });
+}
+
+function renderPublishedDriveBin() {
+  state.publishedDriveBin = normalizePublishedDriveBin(state.publishedDriveBin || []);
+  if (!state.publishedDriveBin.length) return;
+
+  const bin = document.createElement("section");
+  bin.className = "drive-bin";
+  bin.innerHTML = `
+    <div class="drive-bin-header">
+      <div>
+        <p class="eyebrow">Google Drive cleanup</p>
+        <h3>Published video bin</h3>
+      </div>
+      <button class="mini-button danger" type="button" data-drive-bin-action="delete-all">Delete all from Drive</button>
+    </div>
+    <div class="drive-bin-list">
+      ${state.publishedDriveBin.map((item) => `
+        <div class="drive-bin-row">
+          <div class="queue-title">
+            <strong>${escapeHtml(item.title)}</strong>
+            <small>${item.publishedAt ? `Published ${escapeHtml(formatProjectDate(item.publishedAt))}` : "Ready for Drive cleanup"}</small>
+          </div>
+          <button class="mini-button danger" type="button" data-drive-bin-action="delete-one" data-bin-id="${escapeHtml(item.id)}">Delete from Drive</button>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  elements.queueTable.appendChild(bin);
+  bin.querySelector("[data-drive-bin-action='delete-all']")?.addEventListener("click", () => {
+    deletePublishedDriveBinItems(state.publishedDriveBin.map((item) => item.id));
+  });
+  bin.querySelectorAll("[data-drive-bin-action='delete-one']").forEach((button) => {
+    button.addEventListener("click", () => {
+      deletePublishedDriveBinItems([button.dataset.binId]);
+    });
   });
 }
 
@@ -2017,22 +2072,11 @@ async function publishApprovedClips() {
       job.status = "Published";
       job.statusType = "ready";
       job.error = "";
+      addPublishedDriveClipToBin(job);
     } catch (error) {
       job.status = "Failed";
       job.statusType = "blocked";
       job.error = error.message || "The platform rejected this publish.";
-    } finally {
-      // After attempting to publish, if successful, try to DELETE the GDrive folder
-      if (job.status === "Published") {
-        const sourceClip = state.clips.find(c => c.id === job.clipId);
-        if (sourceClip && sourceClip.gdriveFolderId) {
-          fetch(apiUrl("/api/drive/delete-discarded"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ folderIds: [sourceClip.gdriveFolderId] }),
-          }).catch(e => console.warn("Failed to auto-delete GDrive folder:", e));
-        }
-      }
     }
 
     saveAndRender();
@@ -2063,6 +2107,8 @@ function createPublishJob(clip, account) {
     handle: account.handle,
     finalVideoId: clip.vizardVideoId || "",
     videoUrl: clip.videoUrl || "",
+    gdriveFileId: clip.gdriveFileId || "",
+    gdriveFolderId: clip.gdriveFolderId || "",
     socialAccountId: account.vizardSocialAccountId || "",
     provider: account.provider || "vizard",
     directMode: account.directMode || "assistant",
@@ -2080,6 +2126,64 @@ function createPublishJob(clip, account) {
     uploadTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     uploadDate: new Date().toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }),
   };
+}
+
+function addPublishedDriveClipToBin(job) {
+  if (!job || (!job.gdriveFolderId && !job.gdriveFileId)) return;
+
+  state.publishedDriveBin = normalizePublishedDriveBin(state.publishedDriveBin || []);
+  const driveKey = job.gdriveFolderId || job.gdriveFileId;
+  const alreadyQueued = state.publishedDriveBin.some((item) => (
+    (item.gdriveFolderId || item.gdriveFileId) === driveKey
+  ));
+  if (alreadyQueued) return;
+
+  state.publishedDriveBin.unshift({
+    id: `drivebin-${driveKey}`,
+    clipId: job.clipId || "",
+    title: job.clipTitle || job.title || "Published Drive video",
+    gdriveFolderId: job.gdriveFolderId || "",
+    gdriveFileId: job.gdriveFileId || "",
+    publishedAt: new Date().toISOString(),
+    source: "queue",
+  });
+}
+
+async function deleteDriveTargets({ folderIds = [], fileIds = [] }) {
+  const safeFolderIds = folderIds.filter(Boolean);
+  const safeFileIds = fileIds.filter(Boolean);
+  if (!safeFolderIds.length && !safeFileIds.length) return { ok: true, deletedCount: 0 };
+
+  const response = await fetch(apiUrl("/api/drive/delete-discarded"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folderIds: safeFolderIds, fileIds: safeFileIds }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || "Google Drive delete failed.");
+  }
+  return data;
+}
+
+async function deletePublishedDriveBinItems(binIds) {
+  const selectedIds = new Set((Array.isArray(binIds) ? binIds : []).filter(Boolean));
+  state.publishedDriveBin = normalizePublishedDriveBin(state.publishedDriveBin || []);
+  const targets = state.publishedDriveBin.filter((item) => selectedIds.has(item.id));
+  if (!targets.length) return;
+
+  setClipStatus(`Deleting ${targets.length} Google Drive item${targets.length === 1 ? "" : "s"}...`, "ready");
+  try {
+    await deleteDriveTargets({
+      folderIds: targets.map((item) => item.gdriveFolderId).filter(Boolean),
+      fileIds: targets.filter((item) => !item.gdriveFolderId).map((item) => item.gdriveFileId).filter(Boolean),
+    });
+    state.publishedDriveBin = state.publishedDriveBin.filter((item) => !selectedIds.has(item.id));
+    saveAndRender();
+    setClipStatus("Google Drive cleanup complete.", "ready");
+  } catch (error) {
+    setClipStatus(error.message || "Google Drive cleanup failed.", "error");
+  }
 }
 
 async function publishJob(job) {
@@ -2599,7 +2703,17 @@ function setClipStatus(message, tone) {
 }
 
 function apiUrl(pathname) {
-  return pathname;
+  if (!pathname) return "";
+  if (/^https?:\/\//i.test(pathname)) return pathname;
+
+  const isBackendOrigin = (
+    location.protocol !== "file:" &&
+    (location.port === "3000" || location.port === "3001")
+  );
+
+  if (isBackendOrigin) return pathname;
+
+  return `http://localhost:3000${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
 }
 
 function assetUrl(pathname) {
@@ -3507,6 +3621,9 @@ async function renderGDrive() {
                 <button class="primary-button active" type="button" data-gdrive-action="import" data-file-id="${escapeHtml(file.id)}" style="flex: 1; justify-content: center; font-size: 0.75rem; padding: 6px 12px; height: 32px;">
                   Import to Desk
                 </button>
+                <button class="mini-button danger" type="button" data-gdrive-action="delete" data-file-id="${escapeHtml(file.id)}" style="justify-content: center; font-size: 0.75rem; padding: 6px 10px; height: 32px;">
+                  Delete
+                </button>
               </div>
             </div>
           `;
@@ -3581,6 +3698,31 @@ async function renderGDrive() {
       const fileId = btn.getAttribute("data-file-id");
       const file = gdriveFiles.find(f => f.id === fileId);
       if (file) handleGDriveImport(file);
+    });
+  });
+
+  elements.gdriveContainer.querySelectorAll("[data-gdrive-action='delete']").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const fileId = btn.getAttribute("data-file-id");
+      const file = gdriveFiles.find(f => f.id === fileId);
+      if (!file) return;
+      btn.disabled = true;
+      btn.textContent = "Deleting...";
+      try {
+        await deleteDriveTargets({
+          folderIds: file.folderId ? [file.folderId] : [],
+          fileIds: file.folderId ? [] : [file.id],
+        });
+        gdriveFiles = gdriveFiles.filter((item) => item.id !== file.id);
+        state.publishedDriveBin = normalizePublishedDriveBin(state.publishedDriveBin || [])
+          .filter((item) => item.gdriveFileId !== file.id && item.gdriveFolderId !== file.folderId);
+        saveAndRender();
+        setClipStatus(`Deleted "${file.name}" from Google Drive.`, "ready");
+      } catch (error) {
+        btn.disabled = false;
+        btn.textContent = "Delete";
+        setClipStatus(error.message || "Failed to delete Google Drive video.", "error");
+      }
     });
   });
 
@@ -3705,6 +3847,8 @@ function handleGDriveImport(file) {
     approved: true, // Automatically approved for scheduling/queue placement
     sourceTitle: "Google Drive Sync",
     videoUrl: proxyUrl,
+    gdriveFileId: file.id || "",
+    gdriveFolderId: file.folderId || "",
     thumbUrl: "",
     vizardVideoId: "",
     clipEditorUrl: "",
@@ -3939,6 +4083,7 @@ async function publishCustomClip(clipId, customTitle, customCaption, selectedAcc
       activeJob.status = "Published";
       activeJob.statusType = "ready";
       activeJob.error = "";
+      addPublishedDriveClipToBin(activeJob);
     } catch (err) {
       activeJob.status = "Failed";
       activeJob.statusType = "blocked";

@@ -524,18 +524,28 @@ async function handleServiceDriveCreateFolder(request: any) {
 async function handleServiceDriveDeleteDiscarded(request: any) {
   const body = await readJsonRequest(request);
   const folderIds = (Array.isArray(body.folderIds) ? body.folderIds : []).map(sanitizeDriveId).filter(id => id && id !== "root");
+  const fileIds = (Array.isArray(body.fileIds) ? body.fileIds : []).map(sanitizeDriveId).filter(id => id && id !== "root");
 
-  if (!folderIds.length) {
+  if (!folderIds.length && !fileIds.length) {
     return { ok: true, deletedCount: 0 };
   }
 
+  let deletedCount = 0;
   for (const folderId of folderIds) {
     await driveServiceFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}`, {
       method: "DELETE",
     });
+    deletedCount += 1;
   }
 
-  return { ok: true, deletedCount: folderIds.length };
+  for (const fileId of fileIds) {
+    await driveServiceFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`, {
+      method: "DELETE",
+    });
+    deletedCount += 1;
+  }
+
+  return { ok: true, deletedCount };
 }
 
 async function streamServiceDriveFile(request: any, response: any, fileId: string) {
@@ -644,6 +654,18 @@ async function listServiceDriveCompiledFiles(parentId: string) {
     );
   }
   const childFolders = mergeDriveItemsById([...ownChildFolders, ...sharedChildFolders]);
+  let nestedFolders: any[] = [];
+  if (childFolders.length) {
+    const childFolderClauses = childFolders.map((folder: any) => `'${escapeDriveQuery(folder.id)}' in parents`);
+    const nestedFolderQuery = `(${childFolderClauses.join(" or ")}) and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+    nestedFolders = await driveServiceListFiles(
+      nestedFolderQuery,
+      "id,name,modifiedTime,parents",
+      "modifiedTime desc",
+      240,
+    );
+  }
+  const clipCandidateFolders = mergeDriveItemsById([...childFolders, ...nestedFolders]);
 
   const ownDirectFiles = await driveServiceListFiles(
     `${parentQuery} and mimeType = 'video/mp4' and trashed = false`,
@@ -664,8 +686,8 @@ async function listServiceDriveCompiledFiles(parentId: string) {
   const directFiles = mergeDriveItemsById([...ownDirectFiles, ...sharedDirectFiles]);
 
   let subFiles: any[] = [];
-  if (childFolders.length) {
-    const folderClauses = childFolders.map((folder: any) => `'${escapeDriveQuery(folder.id)}' in parents`);
+  if (clipCandidateFolders.length) {
+    const folderClauses = clipCandidateFolders.map((folder: any) => `'${escapeDriveQuery(folder.id)}' in parents`);
     const subQuery = `(${folderClauses.join(" or ")}) and trashed = false and (mimeType = 'video/mp4' or mimeType = 'application/json' or name = 'metadata.json')`;
     subFiles = await driveServiceListFiles(
       subQuery,
@@ -678,7 +700,7 @@ async function listServiceDriveCompiledFiles(parentId: string) {
   const compiled: any[] = [];
   const metadataByJsonFileId: Record<string, any> = {};
 
-  for (const folder of childFolders) {
+  for (const folder of clipCandidateFolders) {
     const mp4 = subFiles.find((item) => Array.isArray(item.parents) && item.parents.includes(folder.id) && item.mimeType === "video/mp4");
     if (!mp4) continue;
 
@@ -1334,11 +1356,75 @@ function parseGeminiOptimizationResponse(raw: string) {
     .replace(/^```\s*/i, "")
     .replace(/```$/i, "")
     .trim();
-  const parsed = JSON.parse(clean || "{}");
+  let parsed: any;
+  try {
+    parsed = JSON.parse(clean || "{}");
+  } catch {
+    parsed = recoverGeminiOptimizationJson(clean);
+  }
   if (!parsed || !Array.isArray(parsed.items)) {
     throw new Error("Gemini returned an invalid optimization response.");
   }
   return parsed;
+}
+
+function recoverGeminiOptimizationJson(raw: string) {
+  const arrayMatch = raw.match(/"items"\s*:\s*\[/);
+  if (!arrayMatch || arrayMatch.index === undefined) {
+    throw new Error("Gemini returned malformed optimization JSON.");
+  }
+
+  const start = raw.indexOf("[", arrayMatch.index);
+  const items: any[] = [];
+  let depth = 0;
+  let objectStart = -1;
+  let inString = false;
+  let escaping = false;
+
+  for (let index = start + 1; index < raw.length; index += 1) {
+    const char = raw[index];
+
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (char === "\\") {
+        escaping = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      if (depth === 0) objectStart = index;
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0 && objectStart >= 0) {
+        const objectText = raw.slice(objectStart, index + 1).replace(/,\s*([}\]])/g, "$1");
+        try {
+          items.push(JSON.parse(objectText));
+        } catch {
+          // Skip only the malformed item; a partial Gemini response is still useful.
+        }
+        objectStart = -1;
+      }
+    }
+  }
+
+  if (!items.length) {
+    throw new Error("Gemini returned malformed optimization JSON.");
+  }
+
+  return { items };
 }
 
 function normalizeGeminiOptimizationItems(items: any[]) {
