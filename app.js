@@ -205,7 +205,7 @@ elements.form.addEventListener("submit", async (event) => {
         setClipStatus("Vizard AI project is now running. Clips will load into the desk here automatically once ready!", "ready");
         startVizardBackgroundPolling();
       } else {
-        setClipStatus(`Imported ${state.clips.length} Vizard clips.`, "ready");
+        setQueueProcessStatus(`Imported ${state.clips.length} Vizard clips.`, "ready");
       }
     } else if (file && state.source.clippingProvider === "local") {
       setProcessing(true);
@@ -213,7 +213,7 @@ elements.form.addEventListener("submit", async (event) => {
       const result = await createRealClips(file);
       state.clips = result.clips;
       state.understanding = result.understanding;
-      setClipStatus(`Created ${state.clips.length} real clips from ${file.name}.`, "ready");
+      setQueueProcessStatus(`Created ${state.clips.length} real clips from ${file.name}.`, "ready");
     } else {
       state.clips = generateClips();
       state.understanding = null;
@@ -223,7 +223,7 @@ elements.form.addEventListener("submit", async (event) => {
     saveAndRender();
     triggerAutoBackupToGoogleDrive(state.clips);
   } catch (error) {
-    setClipStatus(error.message || "Could not create clips.", "error");
+    setQueueProcessStatus(error.message || "Could not create clips.", "error");
   } finally {
     setProcessing(false);
   }
@@ -262,9 +262,9 @@ if (elements.manualUploadForm) {
       };
       await uploadClipToGoogleDrive(clipData);
       elements.manualUploadForm.reset();
-      setClipStatus("Manual upload to Google Drive successful!", "ready");
+      setQueueProcessStatus("Manual upload to Google Drive successful.", "ready");
     } catch (err) {
-      setClipStatus(`Manual upload failed: ${err.message}`, "error");
+      setQueueProcessStatus(`Manual upload failed: ${err.message}`, "error");
     } finally {
       submitButton.disabled = false;
       submitButton.textContent = "Upload to Google Drive";
@@ -374,6 +374,7 @@ function handleRouting() {
     if (secVizardAccounts) secVizardAccounts.style.display = "grid";
   } else if (hash === "#google-drive") {
     if (secGDrive) secGDrive.style.display = "grid";
+    renderGDrive();
   } else if (hash === "#queue") {
     if (secQueue) secQueue.style.display = "grid";
   } else if (hash === "#publish") {
@@ -833,7 +834,7 @@ if (elements.vizardLibrary) {
       if (projectWithClip) {
         const clip = projectWithClip.clips?.find(c => c.id === clipId);
         if (clip) {
-          if (!cachedAccessToken) {
+          if (!cachedAccessToken && !isServiceDriveMode()) {
             setClipStatus("Please sign in to Google Drive under the Google Drive tab first!", "error");
             location.hash = "#google-drive";
             return;
@@ -848,7 +849,7 @@ if (elements.vizardLibrary) {
 
     if (action.dataset.libraryAction === "load") {
       if (!project) return;
-      loadVizardProjectIntoDesk(project);
+      loadVizardProjectIntoDesk(project, { navigateToDesk: true });
       return;
     }
 
@@ -914,6 +915,7 @@ function createInitialState() {
     accounts: [], // Accounts are loaded and normalized in restoreCredentialVault
     vizardProjects: [],
     queue: [],
+    queueNotifications: [],
     publishedDriveBin: [],
     vizardApiAccounts: [],
     activeVizardAccountId: "system",
@@ -942,6 +944,7 @@ function loadState() {
         clips,
         vizardProjects: normalizeVizardProjects(saved.vizardProjects || [], clips, saved.source || {}),
         queue: normalizeQueue(saved.queue || []), // Explicitly normalize and load queue
+        queueNotifications: normalizeQueueNotifications(saved.queueNotifications || []),
         publishedDriveBin: normalizePublishedDriveBin(saved.publishedDriveBin || []),
         optimizationStatuses: normalizeOptimizationStatuses(saved.optimizationStatuses, saved.optimizations),
         aiOptimizationItems: normalizeAiOptimizationItems(saved.aiOptimizationItems || []),
@@ -957,6 +960,19 @@ function loadState() {
 
 function normalizeQueue(queue) {
   return Array.isArray(queue) ? queue : [];
+}
+
+function normalizeQueueNotifications(notifications) {
+  return (Array.isArray(notifications) ? notifications : [])
+    .filter((notice) => notice && notice.message)
+    .map((notice) => ({
+      id: String(notice.id || createId("queue-notice")),
+      message: String(notice.message || ""),
+      tone: notice.tone === "error" ? "error" : "ready",
+      key: String(notice.key || ""),
+      createdAt: String(notice.createdAt || new Date().toISOString()),
+    }))
+    .slice(0, 20);
 }
 
 function normalizePublishedDriveBin(items) {
@@ -1044,8 +1060,13 @@ function normalizeAiOptimizationItems(items) {
 
 function saveAndRender() {
   saveCredentialVault();
-  localStorage.setItem(storageKey, JSON.stringify(state));
+  persistStateOnly();
   render();
+}
+
+function persistStateOnly() {
+  saveCredentialVault();
+  localStorage.setItem(storageKey, JSON.stringify(state));
 }
 
 function loadCredentialVault() {
@@ -1213,7 +1234,6 @@ function render() {
   renderVizardLibrary();
   renderQueue();
   renderCounters();
-  renderGDrive();
   updateSelectionCounter();
   
   // Toggle sidebar link visibility based on settings / analytics preferences
@@ -1495,6 +1515,7 @@ function renderLibraryVideo(clip, projectId) {
 
 function renderQueue() {
   elements.queueTable.innerHTML = "";
+  renderQueueNotifications();
   renderPublishedDriveBin();
 
   if (!state.queue.length) {
@@ -1520,6 +1541,41 @@ function renderQueue() {
       <span class="queue-status ${job.statusType}">${escapeHtml(job.status)}</span>
     `;
     elements.queueTable.appendChild(row);
+  });
+}
+
+function renderQueueNotifications() {
+  state.queueNotifications = normalizeQueueNotifications(state.queueNotifications || []);
+  if (!state.queueNotifications.length) return;
+
+  const section = document.createElement("section");
+  section.className = "queue-notifications";
+  section.innerHTML = `
+    <div class="queue-notifications-header">
+      <div>
+        <p class="eyebrow">Process Log</p>
+        <h3>Recent activity</h3>
+      </div>
+      <button class="mini-button" type="button" data-queue-notice-action="clear">Clear</button>
+    </div>
+    <div class="queue-notifications-list">
+      ${state.queueNotifications.map((notice) => `
+        <div class="queue-notification ${escapeHtml(notice.tone)}">
+          <div class="queue-title">
+            <strong>${escapeHtml(notice.message)}</strong>
+            <small>${escapeHtml(formatProjectDate(notice.createdAt))}</small>
+          </div>
+          <span class="queue-status ${notice.tone === "error" ? "blocked" : "ready"}">${notice.tone === "error" ? "Failed" : "Done"}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  elements.queueTable.appendChild(section);
+  section.querySelector("[data-queue-notice-action='clear']")?.addEventListener("click", () => {
+    state.queueNotifications = [];
+    persistStateOnly();
+    renderQueue();
   });
 }
 
@@ -1856,9 +1912,9 @@ async function refreshVizardLibrary() {
   saveAndRender();
   
   if (reloadedActive) {
-    setClipStatus("Vizard video library refreshed. Currently loaded project highlights updated!", "ready");
+    setQueueProcessStatus("Vizard video library refreshed. Currently loaded project highlights updated.", "ready");
   } else {
-    setClipStatus("Vizard video library refreshed.", "ready");
+    setQueueProcessStatus("Vizard video library refreshed.", "ready");
   }
 }
 
@@ -1886,8 +1942,8 @@ async function importVizardProjectFromInput() {
     
     if (savedProject) {
       if (savedProject.clips?.length) {
-        loadVizardProjectIntoDesk(savedProject);
-        setClipStatus(`Retrieved ${savedProject.clips.length} video${savedProject.clips.length === 1 ? "" : "s"} from Vizard project ${projectId}.`, "ready");
+        loadVizardProjectIntoDesk(savedProject, { navigateToDesk: true });
+        setQueueProcessStatus(`Retrieved ${savedProject.clips.length} video${savedProject.clips.length === 1 ? "" : "s"} from Vizard project ${projectId}.`, "ready");
       } else {
         // If it's a processing project, let's load it empty but set progress, and kick off background polling
         state.clips = [];
@@ -1937,15 +1993,53 @@ function updateStoredVizardProject(source, clips, understanding, fallbackProject
   });
 
   if (existingIndex >= 0) {
+    const existingProject = state.vizardProjects[existingIndex];
     state.vizardProjects[existingIndex] = {
-      ...state.vizardProjects[existingIndex],
+      ...existingProject,
       ...project,
-      createdAt: state.vizardProjects[existingIndex].createdAt || project.createdAt,
+      clips: mergePersistentClipState(project.clips, [
+        ...(existingProject.clips || []),
+        ...(state.clips || []),
+      ]),
+      createdAt: existingProject.createdAt || project.createdAt,
     };
     return;
   }
 
   state.vizardProjects.unshift(project);
+}
+
+function mergePersistentClipState(nextClips, previousClips) {
+  const previousByIdentity = new Map();
+
+  (previousClips || []).forEach((clip) => {
+    getClipIdentityKeys(clip).forEach((key) => previousByIdentity.set(key, clip));
+  });
+
+  return (nextClips || []).map((clip) => {
+    const previous = getClipIdentityKeys(clip)
+      .map((key) => previousByIdentity.get(key))
+      .find(Boolean);
+
+    if (!previous) return clip;
+
+    return {
+      ...clip,
+      gdriveBackedUp: clip.gdriveBackedUp || previous.gdriveBackedUp || false,
+      gdriveFileId: clip.gdriveFileId || previous.gdriveFileId || "",
+      gdriveFolderId: clip.gdriveFolderId || previous.gdriveFolderId || "",
+    };
+  });
+}
+
+function getClipIdentityKeys(clip) {
+  if (!clip) return [];
+  return [
+    clip.id ? `id:${clip.id}` : "",
+    clip.videoUrl ? `url:${clip.videoUrl}` : "",
+    clip.vizardVideoId ? `vizard:${clip.vizardVideoId}` : "",
+    clip.title && clip.start !== undefined && clip.end !== undefined ? `range:${clip.title}:${clip.start}:${clip.end}` : "",
+  ].filter(Boolean);
 }
 
 function buildVizardProject(source, clips, understanding, fallbackProject = {}) {
@@ -1990,7 +2084,8 @@ function buildVizardProject(source, clips, understanding, fallbackProject = {}) 
   };
 }
 
-function loadVizardProjectIntoDesk(project) {
+function loadVizardProjectIntoDesk(project, options = {}) {
+  const { navigateToDesk = false, notify = true } = options;
   state.clips = normalizeClips(project.clips || []).map((clip, index) => ({
     ...clip,
     id: clip.id || createId("vizard-clip"),
@@ -2008,9 +2103,14 @@ function loadVizardProjectIntoDesk(project) {
   elements.videoTitle.value = state.source.title;
   state.queue = [];
   saveAndRender();
-  setClipStatus(`Loaded ${state.clips.length} Vizard video${state.clips.length === 1 ? "" : "s"} into the clip desk.`, "ready");
+  if (notify) {
+    const loadedMessage = `Loaded ${state.clips.length} Vizard video${state.clips.length === 1 ? "" : "s"} into the clip desk.`;
+    setQueueProcessStatus(loadedMessage, "ready");
+  }
   triggerAutoBackupToGoogleDrive(state.clips);
-  location.hash = "#studio";
+  if (navigateToDesk) {
+    location.hash = "#studio";
+  }
 }
 
 async function copyProjectId(projectId) {
@@ -2086,7 +2186,7 @@ async function publishApprovedClips() {
   elements.scheduleApproved.disabled = false;
 
   const failed = state.queue.filter((job) => job.status === "Failed").length;
-  setClipStatus(
+  setQueueProcessStatus(
     failed
       ? `${failed} post${failed === 1 ? "" : "s"} need attention. Check the queue.`
       : "All approved clips were sent to the selected accounts.",
@@ -2180,9 +2280,9 @@ async function deletePublishedDriveBinItems(binIds) {
     });
     state.publishedDriveBin = state.publishedDriveBin.filter((item) => !selectedIds.has(item.id));
     saveAndRender();
-    setClipStatus("Google Drive cleanup complete.", "ready");
+    setQueueProcessStatus("Google Drive cleanup complete.", "ready");
   } catch (error) {
-    setClipStatus(error.message || "Google Drive cleanup failed.", "error");
+    setQueueProcessStatus(error.message || "Google Drive cleanup failed.", "error");
   }
 }
 
@@ -2702,6 +2802,46 @@ function setClipStatus(message, tone) {
   elements.clipStatus.className = `status-note ${tone || ""}`.trim();
 }
 
+function setQueueProcessStatus(message, tone = "ready", options = {}) {
+  const cleanMessage = String(message || "").trim();
+  if (!cleanMessage) return;
+
+  const normalizedTone = tone === "error" ? "error" : "ready";
+  const noticeKey = String(options.key || cleanMessage).trim();
+  const createdAt = new Date().toISOString();
+  const existingNotices = normalizeQueueNotifications(state.queueNotifications || []);
+  const existingIndex = existingNotices.findIndex((notice) => {
+    const existingKey = notice.key || notice.message;
+    return notice.tone === normalizedTone && existingKey === noticeKey;
+  });
+
+  if (existingIndex >= 0) {
+    const existingNotice = existingNotices[existingIndex];
+    state.queueNotifications = normalizeQueueNotifications([
+      {
+        ...existingNotice,
+        message: cleanMessage,
+        key: noticeKey,
+        createdAt,
+      },
+      ...existingNotices.filter((_, index) => index !== existingIndex),
+    ]);
+  } else {
+    state.queueNotifications = normalizeQueueNotifications([
+      {
+        id: createId("queue-notice"),
+        message: cleanMessage,
+        tone: normalizedTone,
+        key: noticeKey,
+        createdAt,
+      },
+      ...existingNotices,
+    ]);
+  }
+  persistStateOnly();
+  renderQueue();
+}
+
 function apiUrl(pathname) {
   if (!pathname) return "";
   if (/^https?:\/\//i.test(pathname)) return pathname;
@@ -2976,11 +3116,11 @@ async function uploadClipToGoogleDrive(clip) {
   }
 
   const videoUrl = clip.videoUrl || ""; // Can be empty for manual uploads
-  if (!videoUrl) return;
-
   const clipId = clip.id;
+  const uploadKey = videoUrl || `file:${clipId}`;
+
   // STRICT deduplication to prevent parallel / duplicate uploads for the same video Url or Clip ID
-  if (liveUploadingUrls.has(videoUrl) || liveUploadingClipIds.has(clipId)) return;
+  if (liveUploadingUrls.has(uploadKey) || liveUploadingClipIds.has(clipId)) return;
   
   state.gdriveBackedUpUrls = state.gdriveBackedUpUrls || [];
   if (videoUrl && state.gdriveBackedUpUrls.includes(videoUrl)) {
@@ -2988,11 +3128,29 @@ async function uploadClipToGoogleDrive(clip) {
     return;
   }
 
-  liveUploadingUrls.add(videoUrl);
+  liveUploadingUrls.add(uploadKey);
   liveUploadingClipIds.add(clipId);
   renderClips();
 
   try {
+    if (isServiceDriveMode()) {
+      setClipStatus(`Saving "${clip.title || "ClipFlow clip"}" to Workspace Drive...`, "ready");
+      const result = await uploadClipToServiceDrive(clip);
+      markClipBackedUp(clip, result.fileId || "", result.folderId || "", videoUrl);
+      liveUploadingClipIds.delete(clipId);
+      liveUploadingUrls.delete(uploadKey);
+      saveAndRender();
+      await triggerGDriveLoad();
+      setQueueProcessStatus(`Saved "${clip.title || "ClipFlow clip"}" to Workspace Drive.`, "ready", {
+        key: `drive-saved:${clipId || uploadKey}`,
+      });
+      return;
+    }
+
+    if (!videoUrl && !(clip.videoFile instanceof File)) {
+      throw new Error("No video source (URL or File) provided for upload.");
+    }
+
     setClipStatus(`Checking Google Drive for existing backup of "${clip.title}"...`, "ready");
 
     const subfolderName = clip.title || 'ClipFlow-Clip';
@@ -3113,37 +3271,13 @@ async function uploadClipToGoogleDrive(clip) {
       console.log("Skipping upload, file already exists in GDrive with id:", existingFileId);
     }
 
-    setClipStatus(`Successfully saved clip "${clip.title}" inside folder!`, "ready");
+    setQueueProcessStatus(`Saved "${clip.title}" to Google Drive.`, "ready", {
+      key: `drive-saved:${clipId || uploadKey}`,
+    });
 
     liveUploadingClipIds.delete(clipId);
-    liveUploadingUrls.delete(videoUrl);
-
-    // Track successfully backed up urls in local persistent state
-    if (videoUrl && !state.gdriveBackedUpUrls.includes(videoUrl)) {
-      state.gdriveBackedUpUrls.push(videoUrl);
-    }
-
-    // Update in stored clips so it doesn't try to auto-upload again
-    const clipIndex = state.clips.findIndex((item) => item.id === clipId || item.videoUrl === videoUrl);
-    if (clipIndex >= 0) {
-      state.clips[clipIndex].gdriveBackedUp = true;
-      if (gdriveFileId) {
-        state.clips[clipIndex].gdriveFolderId = subFolderId; // Store folder ID for discard action
-        state.clips[clipIndex].gdriveFileId = gdriveFileId;
-      }
-    }
-
-    // Update in Vizard projects library if applicable
-    state.vizardProjects.forEach((proj) => {
-      const projClipIndex = proj.clips?.findIndex((item) => item.id === clipId || item.videoUrl === videoUrl);
-      if (projClipIndex >= 0) {
-        proj.clips[projClipIndex].gdriveBackedUp = true;
-        if (gdriveFileId) {
-          proj.clips[projClipIndex].gdriveFileId = gdriveFileId;
-          proj.clips[projClipIndex].gdriveFolderId = subFolderId;
-        }
-      }
-    });
+    liveUploadingUrls.delete(uploadKey);
+    markClipBackedUp(clip, gdriveFileId, subFolderId, videoUrl);
 
     saveAndRender();
 
@@ -3151,16 +3285,86 @@ async function uploadClipToGoogleDrive(clip) {
     await triggerGDriveLoad();
   } catch (err) {
     console.error("GDrive upload failure:", err);
-    setClipStatus(`Backup failed: ${err.message}`, "error");
+    setQueueProcessStatus(`Backup failed: ${err.message}`, "error");
     liveUploadingClipIds.delete(clipId);
-    liveUploadingUrls.delete(videoUrl);
+    liveUploadingUrls.delete(uploadKey);
     renderClips();
   }
 }
 
+async function uploadClipToServiceDrive(clip) {
+  const extraInfo = {
+    clipflow_metadata: true,
+    title: clip.title || "",
+    caption: clip.caption || "",
+    reason: clip.reason || "",
+    transcript: clip.transcript || "",
+    score: clip.score || 0,
+    duration: clip.duration || 0,
+    start: clip.start || 0,
+    end: clip.end || 0,
+    platforms: clip.platforms || []
+  };
+
+  const formData = new FormData();
+  formData.append("title", clip.title || "ClipFlow-Clip");
+  formData.append("parentFolderId", getActiveGDriveFolderId());
+  formData.append("metadata", JSON.stringify(extraInfo));
+  if (clip.videoFile instanceof File) {
+    formData.append("videoFile", clip.videoFile, clip.videoFile.name || `${clip.title || "ClipFlow-Clip"}.mp4`);
+  } else if (clip.videoUrl) {
+    formData.append("videoUrl", assetUrl(clip.videoUrl));
+  } else {
+    throw new Error("No video source (URL or File) provided for upload.");
+  }
+
+  const response = await fetch(apiUrl("/api/drive/upload"), {
+    method: "POST",
+    body: formData,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Workspace Drive upload failed.");
+  }
+  return data;
+}
+
+function markClipBackedUp(clip, gdriveFileId, gdriveFolderId, videoUrl) {
+  state.gdriveBackedUpUrls = state.gdriveBackedUpUrls || [];
+  const clipId = clip.id;
+
+  if (videoUrl && !state.gdriveBackedUpUrls.includes(videoUrl)) {
+    state.gdriveBackedUpUrls.push(videoUrl);
+  }
+
+  const clipIndex = state.clips.findIndex((item) => item.id === clipId || (videoUrl && item.videoUrl === videoUrl));
+  if (clipIndex >= 0) {
+    state.clips[clipIndex].gdriveBackedUp = true;
+    if (gdriveFileId) {
+      state.clips[clipIndex].gdriveFileId = gdriveFileId;
+    }
+    if (gdriveFolderId) {
+      state.clips[clipIndex].gdriveFolderId = gdriveFolderId;
+    }
+  }
+
+  state.vizardProjects.forEach((proj) => {
+    const projClipIndex = proj.clips?.findIndex((item) => item.id === clipId || (videoUrl && item.videoUrl === videoUrl));
+    if (projClipIndex >= 0) {
+      proj.clips[projClipIndex].gdriveBackedUp = true;
+      if (gdriveFileId) {
+        proj.clips[projClipIndex].gdriveFileId = gdriveFileId;
+      }
+      if (gdriveFolderId) {
+        proj.clips[projClipIndex].gdriveFolderId = gdriveFolderId;
+      }
+    }
+  });
+}
+
 function triggerAutoBackupToGoogleDrive(clips) {
   state.preferences = state.preferences || { autoGDriveBackup: true };
-  if (!state.preferences?.autoGDriveBackup || !cachedAccessToken) return;
+  if (!state.preferences?.autoGDriveBackup || (!cachedAccessToken && !isServiceDriveMode())) return;
 
   state.gdriveBackedUpUrls = state.gdriveBackedUpUrls || [];
 
@@ -3199,7 +3403,8 @@ async function getOrFetchGDriveMetadata(fileId) {
 
 async function fetchGDriveFiles() {
   if (isServiceDriveMode()) {
-    const folderId = (state.preferences && state.preferences.gdriveFolderId) || "root";
+    ensureGDriveFolderPreference();
+    const folderId = getActiveGDriveFolderId();
     const res = await fetch(apiUrl(`/api/drive/files?folderId=${encodeURIComponent(folderId)}`));
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) {
@@ -3330,7 +3535,9 @@ async function fetchGDriveFiles() {
 
 async function fetchGDriveFolders() {
   if (isServiceDriveMode()) {
-    const res = await fetch(apiUrl("/api/drive/folders?parentId=root"));
+    ensureGDriveFolderPreference();
+    const parentId = getServiceDriveDefaultFolderId();
+    const res = await fetch(apiUrl(`/api/drive/folders?parentId=${encodeURIComponent(parentId)}`));
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) return [];
     return data.folders || [];
@@ -3363,7 +3570,8 @@ async function fetchGDriveFolders() {
 
 async function createGDriveFolder(folderName) {
   if (isServiceDriveMode()) {
-    const parentId = (state.preferences && state.preferences.gdriveFolderId) || "root";
+    ensureGDriveFolderPreference();
+    const parentId = getActiveGDriveFolderId();
     const res = await fetch(apiUrl("/api/drive/folders"), {
       method: "POST",
       headers: {
@@ -3446,9 +3654,14 @@ async function renderGDrive() {
 
   // Set default preference if missing
   state.preferences = state.preferences || { autoGDriveBackup: true };
+  ensureGDriveFolderPreference();
 
-  const currentFolderName = state.preferences.gdriveFolderName || "Entire Drive Root";
-  const currentFolderId = state.preferences.gdriveFolderId || "root";
+  const defaultFolderId = getServiceDriveDefaultFolderId();
+  const defaultFolderName = getServiceDriveDefaultFolderName();
+  const currentFolderName = getActiveGDriveFolderName();
+  const currentFolderId = getActiveGDriveFolderId();
+  const hasCurrentOption = currentFolderId === defaultFolderId || gdriveFolders.some(folder => folder.id === currentFolderId);
+  const rootOptionLabel = isServiceDriveMode() ? defaultFolderName : "Entire Drive (Root)";
 
   // Generate top layout header for logged-in UI
   const connectedLabel = isServiceDriveMode()
@@ -3477,7 +3690,8 @@ async function renderGDrive() {
         <div style="display: flex; flex-direction: column; gap: 6px;">
           <label for="gdriveFolderSelect" style="font-size: 0.75rem; color: var(--muted); font-weight: 500; text-align: left;">Choose Directory</label>
           <select id="gdriveFolderSelect" style="background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 0.82rem; height: 35px; width: 100%; outline: none; cursor: pointer;">
-            <option value="root" ${currentFolderId === "root" ? "selected" : ""}>📁 Entire Drive (Root)</option>
+            <option value="${escapeHtml(defaultFolderId)}" ${currentFolderId === defaultFolderId ? "selected" : ""}>📁 ${escapeHtml(rootOptionLabel)}</option>
+            ${!hasCurrentOption ? `<option value="${escapeHtml(currentFolderId)}" selected>📁 ${escapeHtml(currentFolderName)}</option>` : ""}
             ${gdriveFolders.map(folder => `
               <option value="${escapeHtml(folder.id)}" ${currentFolderId === folder.id ? "selected" : ""}>📁 ${escapeHtml(folder.name)}${folder.sharedWithMe ? " (Shared)" : ""}</option>
             `).join('')}
@@ -3656,9 +3870,10 @@ async function renderGDrive() {
     folderSelect.addEventListener("change", async (e) => {
       const selectedId = e.target.value;
       state.preferences = state.preferences || {};
+      state.preferences.gdriveWorkspaceRootId = getServiceDriveDefaultFolderId();
       state.preferences.gdriveFolderId = selectedId;
-      if (selectedId === "root") {
-        state.preferences.gdriveFolderName = "Entire Drive Root";
+      if (selectedId === getServiceDriveDefaultFolderId()) {
+        state.preferences.gdriveFolderName = getServiceDriveDefaultFolderName();
       } else {
         const found = gdriveFolders.find(f => f.id === selectedId);
         state.preferences.gdriveFolderName = found ? found.name : "Custom Folder";
@@ -3679,6 +3894,7 @@ async function renderGDrive() {
         createFolderBtn.textContent = "Creating...";
         const newFolderObj = await createGDriveFolder(folderName);
         state.preferences = state.preferences || {};
+        state.preferences.gdriveWorkspaceRootId = getServiceDriveDefaultFolderId();
         state.preferences.gdriveFolderId = newFolderObj.id;
         state.preferences.gdriveFolderName = newFolderObj.name;
         saveAndRender();
@@ -3711,17 +3927,18 @@ async function renderGDrive() {
       try {
         await deleteDriveTargets({
           folderIds: file.folderId ? [file.folderId] : [],
-          fileIds: file.folderId ? [] : [file.id],
+          fileIds: [file.id],
         });
         gdriveFiles = gdriveFiles.filter((item) => item.id !== file.id);
         state.publishedDriveBin = normalizePublishedDriveBin(state.publishedDriveBin || [])
           .filter((item) => item.gdriveFileId !== file.id && item.gdriveFolderId !== file.folderId);
         saveAndRender();
-        setClipStatus(`Deleted "${file.name}" from Google Drive.`, "ready");
+        await triggerGDriveLoad();
+        setQueueProcessStatus(`Deleted "${file.name}" from Google Drive.`, "ready");
       } catch (error) {
         btn.disabled = false;
         btn.textContent = "Delete";
-        setClipStatus(error.message || "Failed to delete Google Drive video.", "error");
+        setQueueProcessStatus(error.message || "Failed to delete Google Drive video.", "error");
       }
     });
   });
@@ -3806,6 +4023,56 @@ function isServiceDriveMode() {
   return Boolean(gdriveServiceStatus && gdriveServiceStatus.configured && gdriveServiceStatus.connected);
 }
 
+function getServiceDriveDefaultFolderId() {
+  if (!isServiceDriveMode()) return "root";
+  return String(gdriveServiceStatus.defaultFolderId || "root");
+}
+
+function getServiceDriveDefaultFolderName() {
+  if (!isServiceDriveMode()) return "Entire Drive Root";
+  return String(gdriveServiceStatus.defaultFolderName || "ClipFlow Workspace");
+}
+
+function getActiveGDriveFolderId() {
+  if (isServiceDriveMode()) {
+    ensureGDriveFolderPreference();
+  }
+  return String((state.preferences && state.preferences.gdriveFolderId) || getServiceDriveDefaultFolderId());
+}
+
+function getActiveGDriveFolderName() {
+  if (isServiceDriveMode()) {
+    ensureGDriveFolderPreference();
+  }
+  return String((state.preferences && state.preferences.gdriveFolderName) || getServiceDriveDefaultFolderName());
+}
+
+function ensureGDriveFolderPreference() {
+  state.preferences = state.preferences || { autoGDriveBackup: true };
+  if (!isServiceDriveMode()) {
+    state.preferences.gdriveFolderId = state.preferences.gdriveFolderId || "root";
+    state.preferences.gdriveFolderName = state.preferences.gdriveFolderName || "Entire Drive Root";
+    return;
+  }
+
+  const defaultFolderId = getServiceDriveDefaultFolderId();
+  const defaultFolderName = getServiceDriveDefaultFolderName();
+  const currentFolderId = String(state.preferences.gdriveFolderId || "");
+  const currentFolderName = String(state.preferences.gdriveFolderName || "");
+  const workspaceRootChanged = String(state.preferences.gdriveWorkspaceRootId || "") !== defaultFolderId;
+  const shouldUseWorkspaceDefault =
+    workspaceRootChanged ||
+    !currentFolderId ||
+    currentFolderId === "root" ||
+    /vizard/i.test(currentFolderName);
+
+  if (defaultFolderId && shouldUseWorkspaceDefault) {
+    state.preferences.gdriveFolderId = defaultFolderId;
+    state.preferences.gdriveFolderName = defaultFolderName;
+    state.preferences.gdriveWorkspaceRootId = defaultFolderId;
+  }
+}
+
 async function loadGDriveServiceStatus() {
   gdriveServiceStatusChecked = true;
   try {
@@ -3813,6 +4080,7 @@ async function loadGDriveServiceStatus() {
     const data = await res.json().catch(() => ({}));
     if (res.ok && data) {
       gdriveServiceStatus = data;
+      ensureGDriveFolderPreference();
     }
   } catch {}
   return gdriveServiceStatus;
@@ -3868,12 +4136,6 @@ function handleGDriveImport(file) {
 
   // Highlight import success
   setClipStatus(`Loaded "${file.name}" to the Clip Desk workspace successful!`, "ready");
-
-  // Flow smoothly up to the clip candidates section
-  const studioGrid = document.getElementById("studio");
-  if (studioGrid) {
-    studioGrid.scrollIntoView({ behavior: "smooth" });
-  }
 }
 
 // Bind static container buttons from header actions
@@ -3914,14 +4176,19 @@ function startVizardBackgroundPolling() {
           if (state.source.vizardProjectId === project.projectId) {
             const updated = state.vizardProjects.find(item => item.projectId === project.projectId);
             if (updated) {
-              loadVizardProjectIntoDesk(updated);
+              loadVizardProjectIntoDesk(updated, { notify: false });
             }
           }
-          setClipStatus(`Vizard project "${project.projectName || project.projectId}" is ready! ${data.clips.length} clip(s) imported.`, "ready");
+          setQueueProcessStatus(`Vizard project "${project.projectName || project.projectId}" is ready. ${data.clips.length} clip(s) imported.`, "ready", {
+            key: `vizard-ready:${project.projectId}`,
+          });
           saveAndRender();
         } else if (data && data.status === "error") {
           project.status = "error";
           project.error = data.error || "Generation failed";
+          setQueueProcessStatus(`Vizard project "${project.projectName || project.projectId}" failed: ${project.error}`, "error", {
+            key: `vizard-failed:${project.projectId}`,
+          });
           saveAndRender();
         }
       } catch (err) {
@@ -4091,6 +4358,17 @@ async function publishCustomClip(clipId, customTitle, customCaption, selectedAcc
     }
     saveAndRender();
   }
+
+  const failed = newJobs.filter((job) => {
+    const activeJob = state.queue.find((item) => item.id === job.id);
+    return activeJob?.status === "Failed";
+  }).length;
+  setQueueProcessStatus(
+    failed
+      ? `${failed} custom publish job${failed === 1 ? "" : "s"} failed. Check the queue.`
+      : `"${customTitle || updatedClip.title}" published successfully.`,
+    failed ? "error" : "ready",
+  );
 }
 
 async function publishBulkCampaign() {
@@ -4132,11 +4410,11 @@ async function publishBulkCampaign() {
       }
     }
 
-    setClipStatus("Bulk campaign published successfully! Visit Queue to monitor tasks.", "ready");
+    setQueueProcessStatus("Bulk campaign published successfully. Visit Queue to monitor tasks.", "ready");
     window.location.hash = "#queue";
 
   } catch (error) {
-    setClipStatus(`Bulk publication issue: ${error.message}`, "error");
+    setQueueProcessStatus(`Bulk publication issue: ${error.message}`, "error");
   } finally {
     if (elements.publishBulkBtn) elements.publishBulkBtn.disabled = false;
     updateSelectionCounter();
@@ -4226,7 +4504,6 @@ if (elements.publishListContainer) {
 
       try {
         await publishCustomClip(clipId, title, caption, selectedAccountIds);
-        setClipStatus(`Successfully published "${title}"! Check the Queue.`, "ready");
         card.style.borderColor = "#10b981";
         card.style.background = "rgba(16, 185, 129, 0.04)";
         if (state.selectedClipIds) {
@@ -4234,7 +4511,7 @@ if (elements.publishListContainer) {
         }
         updateSelectionCounter();
       } catch (err) {
-        setClipStatus(`Failed to publish: ${err.message}`, "error");
+        setQueueProcessStatus(`Failed to publish: ${err.message}`, "error");
         card.style.borderColor = "#ef4444";
       } finally {
         singlePublishBtn.disabled = false;

@@ -148,6 +148,12 @@ async function start() {
         return;
       }
 
+      if (url.pathname === "/api/drive/upload" && request.method === "POST") {
+        const result = await handleServiceDriveUpload(request);
+        sendJson(response, result);
+        return;
+      }
+
       if (url.pathname === "/api/drive/delete-discarded" && request.method === "POST") {
         const result = await handleServiceDriveDeleteDiscarded(request);
         sendJson(response, result);
@@ -427,6 +433,7 @@ async function getServiceDriveStatus() {
     connected: true,
     email: credentials.client_email,
     displayName: "Workspace Google Drive",
+    defaultFolderName: gdriveServiceFolderId && gdriveServiceFolderId !== "root" ? "ClipFlow Workspace" : "Entire Drive Root",
     defaultFolderId: gdriveServiceFolderId || "root",
   };
 }
@@ -500,7 +507,7 @@ async function handleServiceDriveCreateFolder(request: any) {
     metadata.parents = [parentId];
   }
 
-  const response = await driveServiceFetch("https://www.googleapis.com/drive/v3/files?fields=id,name", {
+  const response = await driveServiceFetch("https://www.googleapis.com/drive/v3/files?fields=id,name&supportsAllDrives=true", {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8",
@@ -509,7 +516,7 @@ async function handleServiceDriveCreateFolder(request: any) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.error?.message || `Google Drive folder creation failed (${response.status}).`);
+    throw new Error(formatServiceDriveError(data.error?.message || `Google Drive folder creation failed (${response.status}).`));
   }
 
   return {
@@ -519,6 +526,192 @@ async function handleServiceDriveCreateFolder(request: any) {
       name: String(data.name || name),
     },
   };
+}
+
+async function handleServiceDriveUpload(request: any) {
+  const formData = await readMultipartFormData(request);
+  const title = String(formData.get("title") || "ClipFlow-Clip").trim().slice(0, 160) || "ClipFlow-Clip";
+  const parentFolderId = sanitizeDriveId(formData.get("parentFolderId") || gdriveServiceFolderId || "root");
+  const videoUrl = String(formData.get("videoUrl") || "").trim();
+  const metadata = parseJsonObject(String(formData.get("metadata") || "")) || {};
+  const videoFile = formData.get("videoFile") as any;
+
+  const subFolderId = await getOrCreateServiceDriveSubFolder(title, parentFolderId);
+  const fileName = safeFilename(`${title}.mp4`);
+  const existingFile = await findServiceDriveFile(fileName, subFolderId, "video/mp4");
+
+  let gdriveFileId = existingFile?.id ? String(existingFile.id) : "";
+  if (!gdriveFileId) {
+    const videoPayload = await resolveServiceUploadVideo(videoFile, videoUrl);
+    const uploaded = await uploadServiceDriveMultipart({
+      name: fileName,
+      mimeType: videoPayload.mimeType || "video/mp4",
+      description: JSON.stringify(metadata),
+      parentFolderId: subFolderId,
+      content: videoPayload.content,
+    });
+    gdriveFileId = uploaded.id;
+  }
+
+  const existingMetadata = await findServiceDriveFile("metadata.json", subFolderId, "application/json");
+  if (!existingMetadata?.id) {
+    await uploadServiceDriveMultipart({
+      name: "metadata.json",
+      mimeType: "application/json",
+      parentFolderId: subFolderId,
+      content: Buffer.from(JSON.stringify(metadata), "utf8"),
+    });
+  }
+
+  return {
+    ok: true,
+    folderId: subFolderId,
+    fileId: gdriveFileId,
+  };
+}
+
+async function getOrCreateServiceDriveSubFolder(folderName: string, parentFolderId: string) {
+  const safeName = String(folderName || "ClipFlow-Clip").trim().slice(0, 160) || "ClipFlow-Clip";
+  const safeParentId = sanitizeDriveId(parentFolderId || gdriveServiceFolderId || "root");
+  const existing = await findServiceDriveFolder(safeName, safeParentId);
+  if (existing?.id) return String(existing.id);
+
+  const metadata: any = {
+    name: safeName,
+    mimeType: "application/vnd.google-apps.folder",
+  };
+  if (safeParentId && safeParentId !== "root") {
+    metadata.parents = [safeParentId];
+  }
+
+  const response = await driveServiceFetch("https://www.googleapis.com/drive/v3/files?fields=id,name&supportsAllDrives=true", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(metadata),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(formatServiceDriveError(data.error?.message || `Google Drive folder creation failed (${response.status}).`));
+  }
+  return String(data.id || "");
+}
+
+async function findServiceDriveFolder(folderName: string, parentFolderId: string) {
+  const parentQuery = `'${escapeDriveQuery(parentFolderId || "root")}' in parents`;
+  const nameQuery = `name = '${escapeDriveQuery(folderName)}'`;
+  const files = await driveServiceListFiles(
+    `${parentQuery} and ${nameQuery} and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    "id,name",
+    "modifiedTime desc",
+    1,
+  );
+  return files[0] || null;
+}
+
+async function findServiceDriveFile(fileName: string, parentFolderId: string, mimeType: string) {
+  const parentQuery = `'${escapeDriveQuery(parentFolderId)}' in parents`;
+  const nameQuery = `name = '${escapeDriveQuery(fileName)}'`;
+  const mimeQuery = mimeType ? ` and mimeType = '${escapeDriveQuery(mimeType)}'` : "";
+  const files = await driveServiceListFiles(
+    `${parentQuery} and ${nameQuery}${mimeQuery} and trashed = false`,
+    "id,name,mimeType",
+    "modifiedTime desc",
+    1,
+  );
+  return files[0] || null;
+}
+
+async function resolveServiceUploadVideo(videoFile: any, videoUrl: string) {
+  if (videoFile && typeof videoFile.arrayBuffer === "function" && Number(videoFile.size || 0) > 0) {
+    return {
+      content: Buffer.from(await videoFile.arrayBuffer()),
+      mimeType: String(videoFile.type || "video/mp4"),
+    };
+  }
+
+  if (!videoUrl) {
+    throw new Error("No video file or video URL was provided for Drive upload.");
+  }
+
+  if (videoUrl.startsWith("/media/")) {
+    const localPath = path.normalize(path.join(rootDir, videoUrl.replace(/^\/+/, "")));
+    if (!localPath.startsWith(mediaDir)) {
+      throw new Error("Local video path is outside the media directory.");
+    }
+    return {
+      content: await fsp.readFile(localPath),
+      mimeType: "video/mp4",
+    };
+  }
+
+  const absoluteUrl = new URL(videoUrl, `http://127.0.0.1:${port}`).toString();
+  const response = await fetch(absoluteUrl);
+  if (!response.ok) {
+    throw new Error(`Could not download video for Drive upload (${response.status}).`);
+  }
+  return {
+    content: Buffer.from(await response.arrayBuffer()),
+    mimeType: response.headers.get("content-type") || "video/mp4",
+  };
+}
+
+async function uploadServiceDriveMultipart(options: {
+  name: string;
+  mimeType: string;
+  parentFolderId: string;
+  content: Buffer;
+  description?: string;
+}) {
+  const metadata: any = {
+    name: options.name,
+    mimeType: options.mimeType,
+  };
+  if (options.description) {
+    metadata.description = options.description;
+  }
+  if (options.parentFolderId && options.parentFolderId !== "root") {
+    metadata.parents = [options.parentFolderId];
+  }
+
+  const boundary = `clipflow_service_upload_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const head = Buffer.from(
+    `--${boundary}\r\n` +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    `${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\n` +
+    `Content-Type: ${options.mimeType || "application/octet-stream"}\r\n\r\n`,
+    "utf8",
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
+
+  const response = await driveServiceFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name&supportsAllDrives=true", {
+    method: "POST",
+    headers: {
+      "Content-Type": `multipart/related; boundary=${boundary}`,
+    },
+    body: Buffer.concat([head, options.content, tail]),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(formatServiceDriveError(data.error?.message || `Google Drive upload failed (${response.status}).`));
+  }
+  return {
+    id: String(data.id || ""),
+    name: String(data.name || options.name),
+  };
+}
+
+function formatServiceDriveError(message: string) {
+  const clean = String(message || "").trim();
+  if (/service accounts do not have storage quota/i.test(clean)) {
+    return "Workspace Drive upload needs a Shared Drive destination. The service account cannot own files in My Drive/root. Add the service account to a Google Shared Drive, set GDRIVE_FOLDER_ID to a folder inside that Shared Drive, restart ClipFlow, then upload again.";
+  }
+  if (/insufficient|permission|not authorized|forbidden/i.test(clean)) {
+    return "Google Drive could not move that item to trash because the service account does not have enough permission for it. Upload new videos to the ClipFlow Workspace Shared Drive, or delete older My Drive/OAuth items while signed in with the owning Google account.";
+  }
+  return clean;
 }
 
 async function handleServiceDriveDeleteDiscarded(request: any) {
@@ -532,20 +725,88 @@ async function handleServiceDriveDeleteDiscarded(request: any) {
 
   let deletedCount = 0;
   for (const folderId of folderIds) {
-    await driveServiceFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}`, {
-      method: "DELETE",
-    });
-    deletedCount += 1;
+    const result = await deleteServiceDriveFolder(folderId);
+    deletedCount += result.deletedCount;
   }
 
   for (const fileId of fileIds) {
-    await driveServiceFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`, {
-      method: "DELETE",
-    });
-    deletedCount += 1;
+    deletedCount += await deleteServiceDriveFile(fileId);
   }
 
   return { ok: true, deletedCount };
+}
+
+async function deleteServiceDriveFolder(folderId: string) {
+  const childFiles = await driveServiceListFiles(
+    `'${escapeDriveQuery(folderId)}' in parents and trashed = false`,
+    "id,name,mimeType",
+    "modifiedTime desc",
+    100,
+  );
+
+  let deletedCount = 0;
+  for (const child of childFiles) {
+    if (child?.id) {
+      deletedCount += await deleteServiceDriveFile(String(child.id));
+    }
+  }
+
+  try {
+    deletedCount += await deleteServiceDriveFile(folderId);
+  } catch (error: any) {
+    if (!isDrivePermissionError(error?.message) || deletedCount === 0) {
+      throw error;
+    }
+    console.warn(`Deleted ${deletedCount} child item(s), but could not delete Drive folder ${folderId}: ${error.message}`);
+  }
+  return { deletedCount };
+}
+
+async function deleteServiceDriveFile(fileId: string) {
+  const trashResponse = await driveServiceFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,trashed`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({ trashed: true }),
+  });
+
+  if (trashResponse.status === 404) {
+    return 0;
+  }
+
+  if (trashResponse.ok) {
+    return 1;
+  }
+
+  const trashError = await readDriveErrorMessage(trashResponse, `Google Drive trash failed (${trashResponse.status}).`);
+  if (isDrivePermissionError(trashError)) {
+    const deleteResponse = await driveServiceFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`, {
+      method: "DELETE",
+    });
+
+    if (deleteResponse.status === 404) {
+      return 0;
+    }
+
+    if (deleteResponse.ok) {
+      return 1;
+    }
+
+    const deleteError = await readDriveErrorMessage(deleteResponse, `Google Drive delete failed (${deleteResponse.status}).`);
+    throw new Error(formatServiceDriveError(deleteError || trashError));
+  }
+
+  throw new Error(formatServiceDriveError(trashError));
+}
+
+async function readDriveErrorMessage(response: Response, fallback: string) {
+  const data = await response.json().catch(async () => ({ error: { message: await response.text().catch(() => "") } }));
+  return String(data?.error?.message || fallback);
+}
+
+function isDrivePermissionError(message: string) {
+  return /insufficient|permission|not authorized|forbidden/i.test(String(message || ""));
 }
 
 async function streamServiceDriveFile(request: any, response: any, fileId: string) {
@@ -2858,6 +3119,16 @@ function readJsonRequest(request: any): Promise<any> {
       }
     });
   });
+}
+
+async function readMultipartFormData(request: any) {
+  const webRequest = new Request(`http://127.0.0.1:${port}${request.url || "/"}`, {
+    method: request.method || "POST",
+    headers: request.headers,
+    body: request,
+    duplex: "half",
+  } as any);
+  return webRequest.formData();
 }
 
 function resolveMediaPath(mediaUrl) {
