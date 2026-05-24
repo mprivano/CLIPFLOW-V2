@@ -591,7 +591,7 @@ if (elements.toggleTelegramBtn && elements.telegramForm) {
     const isHidden = elements.telegramForm.style.display === "none";
     elements.telegramForm.style.display = isHidden ? "block" : "none";
     if (isHidden) {
-      hydrateTelegramForm();
+      clearTelegramForm();
     }
   });
 }
@@ -617,6 +617,11 @@ if (elements.saveTelegram && elements.telegramForm) {
       handle = "@telegram_bot";
     }
 
+    const telegramAccountKey = getTelegramAccountKey({
+      telegramBotToken: botToken,
+      telegramChatId: chatId,
+    });
+
     // Validate bot token early so publishing doesn't fail later with a vague "Not Found".
     try {
       const res = await fetch(apiUrl("/api/telegram/validate"), {
@@ -640,16 +645,17 @@ if (elements.saveTelegram && elements.telegramForm) {
       audience: "Send to Phone Bot",
       connected: true,
       enabled: true,
-      review: `Ready. Chat ID: ${chatId}`,
+      review: getTelegramAccountReview({ telegramBotToken: botToken, telegramChatId: chatId }),
       gate: "ready",
       provider: "telegram",
+      telegramAccountKey,
       telegramBotToken: botToken,
       telegramChatId: chatId,
     };
 
     if (!state.accounts) state.accounts = [];
     const existingIndex = state.accounts.findIndex((account) => {
-      return account.provider === "telegram" && String(account.telegramChatId || "") === chatId;
+      return account.provider === "telegram" && getTelegramAccountKey(account) === telegramAccountKey;
     });
     if (existingIndex >= 0) {
       state.accounts[existingIndex] = {
@@ -664,9 +670,7 @@ if (elements.saveTelegram && elements.telegramForm) {
 
     // Reset Form
     elements.telegramForm.style.display = "none";
-    elements.telegramBotToken.value = "";
-    elements.telegramChatId.value = "";
-    elements.telegramHandle.value = "";
+    clearTelegramForm();
 
     setClipStatus(`Telegram account ${handle} added successfully!`, "ready");
   });
@@ -1092,7 +1096,7 @@ function loadCredentialVault() {
 function saveCredentialVault() {
   const directAccounts = (state.accounts || []).filter((account) => {
     return account.provider === "direct" || account.provider === "telegram";
-  });
+  }).map(normalizeCredentialAccount);
 
   const vault = {
     accounts: directAccounts,
@@ -1103,16 +1107,29 @@ function saveCredentialVault() {
   localStorage.setItem(credentialVaultKey, JSON.stringify(vault));
 }
 
+function normalizeCredentialAccount(account) {
+  if (!account || account.provider !== "telegram") return account;
+  return {
+    ...account,
+    telegramAccountKey: getTelegramAccountKey(account),
+    review: getTelegramAccountReview(account),
+  };
+}
+
 function restoreCredentialVault(appState) {
   const vault = loadCredentialVault();
-  const accountsById = new Map((appState.accounts || []).map((account) => [account.id, account]));
+  const accountsById = new Map((appState.accounts || []).map((account) => {
+    const normalized = normalizeCredentialAccount(account);
+    return [normalized.id, normalized];
+  }));
 
   // Merge accounts from the credential vault (direct/telegram)
   vault.accounts.forEach((account) => {
     if (!account?.id) return;
+    const normalized = normalizeCredentialAccount(account);
     accountsById.set(account.id, {
       ...accountsById.get(account.id),
-      ...account,
+      ...normalized,
     });
   });
 
@@ -1171,6 +1188,12 @@ function hydrateTelegramForm() {
   if (elements.telegramHandle) {
     elements.telegramHandle.value = saved.handle || "";
   }
+}
+
+function clearTelegramForm() {
+  if (elements.telegramBotToken) elements.telegramBotToken.value = "";
+  if (elements.telegramChatId) elements.telegramChatId.value = "";
+  if (elements.telegramHandle) elements.telegramHandle.value = "";
 }
 
 function hydrateForm() {
@@ -1372,6 +1395,7 @@ function renderAccounts() {
   elements.accountList.innerHTML = "";
   state.accounts.forEach((account) => {
     const ready = isPublishReadyAccount(account);
+    const accountReview = account.provider === "telegram" ? getTelegramAccountReview(account) : account.review;
     
     let actionLabel = account.vizardSocialAccountId ? (ready ? "Connected" : "Reconnect") : "Link";
     let actionAttr = `data-account-action="connect" data-account-id="${account.id}"`;
@@ -1400,7 +1424,7 @@ function renderAccounts() {
         </div>
       </div>
       <div class="account-main">
-        <span class="account-meta">${escapeHtml(account.review)}</span>
+        <span class="account-meta">${escapeHtml(accountReview)}</span>
         <button class="mini-button ${(ready && account.provider !== "direct") ? "active" : ""}" type="button" ${actionAttr}>
           ${actionLabel}
         </button>
@@ -2886,6 +2910,26 @@ function createId(prefix) {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getTelegramAccountKey(account) {
+  const token = String(account?.telegramBotToken || "").trim();
+  const chatId = String(account?.telegramChatId || "").trim().toLowerCase();
+  const savedKey = String(account?.telegramAccountKey || "").trim();
+  if (token || chatId) return `${token}::${chatId}`;
+  return savedKey;
+}
+
+function getTelegramBotFingerprint(token) {
+  const clean = String(token || "").trim();
+  if (!clean) return "Bot env";
+  return `Bot #${String(hashString(clean)).padStart(4, "0")}`;
+}
+
+function getTelegramAccountReview(account) {
+  const chatId = String(account?.telegramChatId || "").trim();
+  const chatLabel = chatId || "saved chat";
+  return `Ready. ${getTelegramBotFingerprint(account?.telegramBotToken)} to ${chatLabel}`;
 }
 
 function inferTitleFromUrl(url) {
